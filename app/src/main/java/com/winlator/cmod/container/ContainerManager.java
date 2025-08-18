@@ -287,57 +287,6 @@ public class ContainerManager {
         return null;  // Return null if no matching container is found
     }
 
-    public void importContainer(File importDir, Runnable callback) {
-        Executors.newSingleThreadExecutor().execute(() -> {
-            try {
-                if (!importDir.exists() || !importDir.isDirectory()) {
-                    Log.e("ContainerManager", "Invalid container directory for import: " + importDir.getPath());
-                    return;
-                }
-
-                // Get the next container ID and set the new container name
-                int newContainerId = getNextContainerId();
-                String newContainerName = ImageFs.USER + "-" + newContainerId;
-                File newContainerDir = new File(homeDir, newContainerName);
-
-                if (newContainerDir.exists()) {
-                    Log.e("ContainerManager", "Container directory already exists: " + newContainerDir.getPath());
-                    return;
-                }
-
-                if (!newContainerDir.mkdirs()) {
-                    Log.e("ContainerManager", "Failed to create directory: " + newContainerDir.getPath());
-                    return;
-                }
-
-                // Copy the files from the import directory to the new container directory
-                if (!FileUtils.copy(importDir, newContainerDir, file -> FileUtils.chmod(file, 0771))) {
-                    FileUtils.delete(newContainerDir);
-                    Log.e("ContainerManager", "Failed to copy container files to: " + newContainerDir.getPath());
-                    return;
-                }
-
-                // Create the new container object and save its data
-                Container newContainer = new Container(newContainerId, this);
-                newContainer.setRootDir(newContainerDir);
-                newContainer.setName(importDir.getName());
-                newContainer.saveData();
-                containers.add(newContainer);
-                maxContainerId++;
-
-                Log.d("ContainerManager", "Container imported successfully to: " + newContainerDir.getPath());
-                // Make sure to run the callback after successful import
-                if (callback != null) {
-                    callback.run();
-                }
-            } catch (Exception e) {
-                Log.e("ContainerManager", "Failed to import container from: " + importDir.getPath(), e);
-            }
-        });
-    }
-
-
-
     public void exportContainer(Container container, Runnable callback) {
         Executors.newSingleThreadExecutor().execute(() -> {
             try {

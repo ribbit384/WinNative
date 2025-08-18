@@ -10,13 +10,6 @@
         android:color="#FFFFFF"
         app:showAsAction="ifRoom" />
 
-    <!-- New Import Container button -->
-    <item
-        android:id="@+id/containers_menu_import"
-        android:title="Import Container"
-        android:icon="@drawable/icon_action_bar_import"
-    app:showAsAction="ifRoom" />
-
     <item
         android:icon="@drawable/icon_action_bar_add"
         android:id="@+id/containers_menu_add"

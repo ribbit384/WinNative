@@ -449,7 +449,6 @@
     <string name="fullscreen_stretched">Enable Fullscreen (Stretched)</string>
     <string name="export_container">Export Container</string>
     <string name="exporting_container">Exporting Container...</string>
-    <string name="importing_container">Importing Container...</string>
 
     <string name="brightness">Brightness</string>
     <string name="contrast">Contrast</string>
