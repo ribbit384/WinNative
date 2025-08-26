@@ -910,9 +910,6 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                 debugDialog.show();
                 drawerLayout.closeDrawers();
                 break;
-            case R.id.main_menu_touchpad_help:
-                showTouchpadHelpDialog();
-                break;
             case R.id.main_menu_exit:
                 drawerLayout.closeDrawers();
                 exit();
@@ -1506,14 +1503,6 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             envVars.put("ENABLE_VKBASALT", "1");
             envVars.put("VKBASALT_CONFIG", vkbasaltConfig);
         }
-    }
-
-    private void showTouchpadHelpDialog() {
-        ContentDialog dialog = new ContentDialog(this, R.layout.touchpad_help_dialog);
-        dialog.setTitle(R.string.touchpad_help);
-        dialog.setIcon(R.drawable.icon_help);
-        dialog.findViewById(R.id.BTCancel).setVisibility(View.GONE);
-        dialog.show();
     }
 
     @Override
