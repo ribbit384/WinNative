@@ -417,22 +417,6 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             ProcessHelper.addDebugCallback(debugDialog = new DebugDialog(this));
         }
 
-        // Retrieve secondary executable and delay
-        String secondaryExec = shortcut != null ? shortcut.getExtra("secondaryExec") : null;
-        int execDelay = shortcut != null ? Integer.parseInt(shortcut.getExtra("execDelay", "0")) : 0;
-
-        // Debug logging for secondaryExec and execDelay
-        Log.d("XServerDisplayActivity", "Secondary Exec: " + secondaryExec);
-        Log.d("XServerDisplayActivity", "Execution Delay: " + execDelay);
-
-        // If a secondary executable is specified, schedule it
-        if (secondaryExec != null && !secondaryExec.isEmpty() && execDelay > 0) {
-            scheduleSecondaryExecution(secondaryExec, execDelay);
-            Log.d("XServerDisplayActivity", "Scheduling secondary execution: " + secondaryExec + " with delay: " + execDelay);
-        } else {
-            Log.d("XServerDisplayActivity", "No valid secondary executable or delay is zero, skipping scheduling.");
-        }
-
         graphicsDriver = container.getGraphicsDriver();
         String graphicsDriverConfig = container.getGraphicsDriverConfig();
         audioDriver = container.getAudioDriver();
@@ -1845,15 +1829,6 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             Log.d("XServerDisplayActivity", "Hiding hud for Window " + window.getName());
             runOnUiThread(() -> frameRating.setVisibility(View.GONE));
             runOnUiThread(() -> frameRating.reset());
-        }
-    }
-
-    private void scheduleSecondaryExecution(String secondaryExec, int delaySeconds) {
-        if (winHandler != null) {
-            winHandler.execWithDelay(secondaryExec, delaySeconds);
-            Log.d("XServerDisplayActivity", "Scheduled secondary execution: " + secondaryExec + " with delay: " + delaySeconds);
-        } else {
-            Log.e("XServerDisplayActivity", "WinHandler is null, cannot schedule secondary execution.");
         }
     }
 

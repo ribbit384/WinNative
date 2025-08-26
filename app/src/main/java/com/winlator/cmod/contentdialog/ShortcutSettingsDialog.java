@@ -180,26 +180,9 @@ public class ShortcutSettingsDialog extends ContentDialog {
             }
         });
 
-        final CheckBox cbUseSecondaryExec = findViewById(R.id.CBUseSecondaryExec);
-        final LinearLayout llSecondaryExecOptions = findViewById(R.id.LLSecondaryExecOptions);
-        final EditText etSecondaryExec = findViewById(R.id.ETSecondaryExec);
-        final EditText etExecDelay = findViewById(R.id.ETExecDelay);
-
-        boolean useSecondaryExec = !shortcut.getExtra("secondaryExec", "").isEmpty();
-        cbUseSecondaryExec.setChecked(useSecondaryExec);
-        llSecondaryExecOptions.setVisibility(useSecondaryExec ? View.VISIBLE : View.GONE);
-        etSecondaryExec.setText(shortcut.getExtra("secondaryExec"));
-        etExecDelay.setText(shortcut.getExtra("execDelay", "0"));
-
-        cbUseSecondaryExec.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            llSecondaryExecOptions.setVisibility(isChecked ? View.VISIBLE : View.GONE);
-        });
-
-
         final CheckBox cbFullscreenStretched =  findViewById(R.id.CBFullscreenStretched);
         boolean fullscreenStretched = shortcut.getExtra("fullscreenStretched", "0").equals("1");
         cbFullscreenStretched.setChecked(fullscreenStretched);
-
 
         final Runnable showInputWarning = () -> ContentDialog.alert(context, R.string.enable_xinput_and_dinput_same_time, null);
         final CheckBox cbEnableXInput = findViewById(R.id.CBEnableXInput);
@@ -382,15 +365,6 @@ public class ShortcutSettingsDialog extends ContentDialog {
                 shortcut.putExtra("emulator", !emulator.equals(shortcut.container.getEmulator()) ? emulator : null);
                 shortcut.putExtra("midiSoundFont", !midiSoundFont.equals(shortcut.container.getMIDISoundFont()) ? midiSoundFont : null);
 
-                if (cbUseSecondaryExec.isChecked()) {
-                    String secondaryExec = etSecondaryExec.getText().toString().trim();
-                    String execDelay = etExecDelay.getText().toString().trim();
-                    shortcut.putExtra("secondaryExec", !secondaryExec.isEmpty() ? secondaryExec : null);
-                    shortcut.putExtra("execDelay", !execDelay.isEmpty() ? execDelay : null);
-                } else {
-                    shortcut.putExtra("secondaryExec", null);
-                    shortcut.putExtra("execDelay", null);
-                }
 
                 shortcut.putExtra("fullscreenStretched", cbFullscreenStretched.isChecked() ? "1" : null);
 
