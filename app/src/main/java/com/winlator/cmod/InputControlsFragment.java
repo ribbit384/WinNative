@@ -218,7 +218,7 @@ public class InputControlsFragment extends Fragment {
             if (currentProfile != null) {
                 File exportedFile = manager.exportProfile(currentProfile);
                 if (exportedFile != null) {
-                    String path = exportedFile.getPath().substring(exportedFile.getPath().indexOf(Environment.DIRECTORY_DOWNLOADS));
+                    String path = exportedFile.getPath();
                     AppUtils.showToast(context, context.getString(R.string.profile_exported_to)+" "+path);
                 }
             }
