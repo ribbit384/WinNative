@@ -10,11 +10,11 @@ Winlator is an Android application that lets you run Windows (x86\_64) applicati
 
 This is a fork of the **Winlator Bionic** project by [Pipetto-crypto](https://github.com/Pipetto-crypto/winlator).
 
-## What is the Ludashi Build
+## APK Build Explanations
+
+### what is Ludashi?
 
 The Ludashi Build is functionally identical to the standard Bionic app, but the package name has been renamed to mimic Ludashi, a popular benchmark app. Some Android phones — especially Xiaomi devices — may automatically enable performance mode when such apps are detected, potentially reducing throttling and boosting performance slightly.
-
-## APK Build Explanations
 
 ### Dev-Vanilla Build
 
@@ -69,4 +69,5 @@ Many thanks to [ptitseb](https://github.com/ptitSeb) (Box86/Box64), [Danylo](htt
 
 Thank you to
 all the people who believe in this project.
+
 
