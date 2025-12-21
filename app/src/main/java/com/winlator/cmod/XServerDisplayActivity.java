@@ -1618,7 +1618,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                 Log.d(TAG, "Extracting fallback DXVK .tzst archive: " + dxvkWrapper);
                 TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "dxwrapper/" + dxvkWrapper + ".tzst", windowsDir, onExtractFileListener);
 
-                if (compareVersion(extractDotVersion(dxvkWrapper), "2.4") < 0) {
+                if (compareVersion(dxvkWrapper, "2.4") < 0) {
                     Log.d(TAG, "Extracting d8vk as part of DXVK version " + dxvkWrapper);
                     TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "dxwrapper/d8vk-" + DefaultVersion.D8VK + ".tzst", windowsDir, onExtractFileListener);
                 }
