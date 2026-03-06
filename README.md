@@ -71,14 +71,6 @@ You can find updated components (known as `wcps`) to improve compatibility and p
 
 
 
-if you like my work you can buy me a [coffee](https://ko-fi.com/A0A51VGU2B) 
-
-
-
-
-
-
-
 
 
 
