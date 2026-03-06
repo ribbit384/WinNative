@@ -607,9 +607,9 @@ public class ContainerDetailFragment extends Fragment {
                     shortcut.putExtra("controllerMapping", controllerMapping);
                     
                     // Handle container_id override
-                    String wineVersion = sWineVersion.getSelectedItem() != null ? sWineVersion.getSelectedItem().toString() : WineInfo.MAIN_WINE_VERSION.identifier();
-                    if (wineVersion.startsWith("Container: ")) {
-                        String targetContainerName = wineVersion.replace("Container: ", "");
+                    String wineVersionStr = sWineVersion.getSelectedItem() != null ? sWineVersion.getSelectedItem().toString() : WineInfo.MAIN_WINE_VERSION.identifier();
+                    if (wineVersionStr.startsWith("Container: ")) {
+                        String targetContainerName = wineVersionStr.replace("Container: ", "");
                         for (Container c : manager.getContainers()) {
                             if (c.getName().equals(targetContainerName)) {
                                 shortcut.putExtra("container_id", String.valueOf(c.id));
@@ -617,7 +617,8 @@ public class ContainerDetailFragment extends Fragment {
                             }
                         }
                     } else {
-                        shortcut.putExtra("wineVersion", wineVersion);
+                        String wineVersionId = WineInfo.fromIdentifier(context, contentsManager, wineVersionStr).identifier();
+                        shortcut.putExtra("wineVersion", wineVersionId);
                     }
                     
                     shortcut.saveData();
@@ -678,7 +679,8 @@ public class ContainerDetailFragment extends Fragment {
                     data.put("fexcoreVersion", fexcoreVersion);
                     data.put("fexcorePreset", fexcorePreset);
                     data.put("desktopTheme", desktopTheme);
-                    data.put("wineVersion", sWineVersion.getSelectedItem() != null ? sWineVersion.getSelectedItem().toString() : WineInfo.MAIN_WINE_VERSION.identifier());
+                    String selectedWineStr = sWineVersion.getSelectedItem() != null ? sWineVersion.getSelectedItem().toString() : WineInfo.MAIN_WINE_VERSION.identifier();
+                    data.put("wineVersion", WineInfo.fromIdentifier(context, contentsManager, selectedWineStr).identifier());
                     data.put("midiSoundFont", midiSoundFont);
                     data.put("lc_all", lc_all);
                     data.put("primaryController", primaryController);
@@ -1120,8 +1122,8 @@ public class ContainerDetailFragment extends Fragment {
                 Spinner sDXWrapper = view.findViewById(R.id.SDXWrapper);
                 View vDXWrapperConfig = view.findViewById(R.id.BTDXWrapperConfig);
                 sEmulator64.setEnabled(false);
-                String wineVersion = sWineVersion.getSelectedItem() != null ? sWineVersion.getSelectedItem().toString() : WineInfo.MAIN_WINE_VERSION.identifier();
-                WineInfo wineInfo = WineInfo.fromIdentifier(context, contentsManager, wineVersion);
+                String selectedWineStr = sWineVersion.getSelectedItem() != null ? sWineVersion.getSelectedItem().toString() : WineInfo.MAIN_WINE_VERSION.identifier();
+                WineInfo wineInfo = WineInfo.fromIdentifier(context, contentsManager, selectedWineStr);
                 if (wineInfo.isArm64EC()) {
                     fexcoreFL.setVisibility(View.VISIBLE);
                     sEmulator.setEnabled(true);

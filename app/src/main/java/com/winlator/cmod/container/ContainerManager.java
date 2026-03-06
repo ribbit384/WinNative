@@ -55,27 +55,32 @@ public class ContainerManager {
         containers.clear();
         maxContainerId = 0;
 
-        try {
-            File[] files = homeDir.listFiles();
-            if (files != null) {
-                for (File file : files) {
-                    if (file.isDirectory()) {
-                        if (file.getName().startsWith(ImageFs.USER + "-")) {
+        File[] files = homeDir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.isDirectory()) {
+                    if (file.getName().startsWith(ImageFs.USER + "-")) {
+                        try {
                             Container container = new Container(
                                     Integer.parseInt(file.getName().replace(ImageFs.USER + "-", "")), this
                             );
 
                             container.setRootDir(new File(homeDir, ImageFs.USER + "-" + container.id));
-                            JSONObject data = new JSONObject(FileUtils.readString(container.getConfigFile()));
+                            String configStr = FileUtils.readString(container.getConfigFile());
+                            if (configStr == null) {
+                                Log.w("ContainerManager", "Skipping container " + container.id + ": missing or unreadable config file");
+                                continue;
+                            }
+                            JSONObject data = new JSONObject(configStr);
                             container.loadData(data);
                             containers.add(container);
                             maxContainerId = Math.max(maxContainerId, container.id);
+                        } catch (Exception e) {
+                            Log.e("ContainerManager", "Error loading container " + file.getName(), e);
                         }
                     }
                 }
             }
-        } catch (JSONException | NullPointerException e) {
-            Log.e("ContainerManager", "Error loading containers", e);
         }
     }
 
