@@ -319,6 +319,41 @@ class SteamService : Service(), IChallengeUrlChanged {
             return true
         }
 
+        fun pauseAll() {
+            downloadJobs.values.forEach { if (it.isActive()) it.cancel("Paused all") }
+            Unit
+        }
+
+        fun resumeAll() {
+            downloadJobs.forEach { (appId, info) ->
+                val status = info.getStatusFlow().value
+                if (!info.isActive() && (status == DownloadPhase.QUEUED || status == DownloadPhase.PAUSED || status == DownloadPhase.FAILED)) {
+                    downloadApp(appId)
+                }
+            }
+            Unit
+        }
+
+        fun cancelAll() {
+            downloadJobs.values.toList().forEach { it.cancel("Cancelled all") }
+            downloadJobs.clear()
+            Unit
+        }
+
+        fun checkQueue() {
+            val maxParallel = PrefManager.downloadQueueSize
+            val activeCount = downloadJobs.values.count { it.isActive() && it.getStatusFlow().value != DownloadPhase.QUEUED }
+            
+            if (activeCount < maxParallel) {
+                val nextInQueue = downloadJobs.entries.find { it.value.getStatusFlow().value == DownloadPhase.QUEUED }
+                if (nextInQueue != null) {
+                    Timber.i("Starting queued download for appId: ${nextInQueue.key}")
+                    downloadApp(nextInQueue.key)
+                }
+            }
+            Unit
+        }
+
         private val downloadJobs = ConcurrentHashMap<Int, DownloadInfo>()
 
         private fun notifyDownloadStarted(appId: Int) {
@@ -338,6 +373,8 @@ class SteamService : Service(), IChallengeUrlChanged {
             } else {
                 notifyDownloadStopped(appId)
             }
+            checkQueue()
+            Unit
         }
 
         fun clearCompletedDownloads() {
@@ -616,6 +653,14 @@ class SteamService : Service(), IChallengeUrlChanged {
 
         val defaultAppInstallPath: String
             get() {
+                val context = PluviaApp.instance.applicationContext ?: return internalAppInstallPath
+                val storeDefaultUri = if (PrefManager.useSingleDownloadFolder) PrefManager.defaultDownloadFolder else PrefManager.steamDownloadFolder
+                if (storeDefaultUri.isNotEmpty()) {
+                    val baseDir = com.winlator.cmod.core.FileUtils.getFilePathFromUri(context, android.net.Uri.parse(storeDefaultUri))
+                    Timber.i("defaultAppInstallPath: resolved baseDir $baseDir from URI $storeDefaultUri")
+                    if (baseDir != null) return baseDir
+                }
+
                 return if (PrefManager.useExternalStorage && File(PrefManager.externalStoragePath).exists()) {
                     // We still have an SD card file structure as expected
                     Timber.i("Using external storage")
@@ -629,6 +674,13 @@ class SteamService : Service(), IChallengeUrlChanged {
 
         val defaultAppStagingPath: String
             get() {
+                val context = PluviaApp.instance.applicationContext ?: return internalAppStagingPath
+                val storeDefaultUri = if (PrefManager.useSingleDownloadFolder) PrefManager.defaultDownloadFolder else PrefManager.steamDownloadFolder
+                if (storeDefaultUri.isNotEmpty()) {
+                    val baseDir = com.winlator.cmod.core.FileUtils.getFilePathFromUri(context, android.net.Uri.parse(storeDefaultUri))
+                    if (baseDir != null) return Paths.get(baseDir, "staging").pathString
+                }
+
                 return if (PrefManager.useExternalStorage) {
                     externalAppStagingPath
                 } else {
@@ -972,6 +1024,33 @@ class SteamService : Service(), IChallengeUrlChanged {
 
             val appName = getAppDirName(info)
             val oldName = info?.name.orEmpty()
+
+            // Respect user-selected default download folder
+            val context = PluviaApp.instance.applicationContext
+            if (context != null) {
+                val storeDefaultUri = if (PrefManager.useSingleDownloadFolder) PrefManager.defaultDownloadFolder else PrefManager.steamDownloadFolder
+                if (storeDefaultUri.isNotEmpty()) {
+                    val baseDir = com.winlator.cmod.core.FileUtils.getFilePathFromUri(context, android.net.Uri.parse(storeDefaultUri))
+                    Timber.i("getAppDirPath: resolved baseDir $baseDir from URI $storeDefaultUri")
+                    if (baseDir != null) {
+                        val path = Paths.get(baseDir, appName)
+                        if (Files.exists(path)) {
+                            Timber.i("getAppDirPath: found existing path $path")
+                            return path.pathString
+                        }
+                        if (oldName.isNotEmpty()) {
+                            val oldPath = Paths.get(baseDir, oldName)
+                            if (Files.exists(oldPath)) {
+                                Timber.i("getAppDirPath: found existing oldPath $oldPath")
+                                return oldPath.pathString
+                            }
+                        }
+                        // If it doesn't exist yet, this is where we'll install it
+                        Timber.i("getAppDirPath: returning new path $path")
+                        return path.pathString
+                    }
+                }
+            }
 
             // Internal first (legacy installs), external second
             val internalPath = Paths.get(internalAppInstallPath, appName)
@@ -1964,19 +2043,30 @@ class SteamService : Service(), IChallengeUrlChanged {
                 val preSnapshotSelectedDepots = preSnapshotMainAppDepots + dlcAppDepots
                 
                 if (preSnapshotSelectedDepots.isEmpty()) {
-                    Timber.i("selectedDepots is empty before snapshot filtering")
+                    Timber.i("selectedDepots is empty before snapshot filtering - App already installed.")
+                    
+                    // Instead of returning null, create a completed/verifying job so it shows in UI
+                    val info = DownloadInfo(1, appId, CopyOnWriteArrayList(listOf(appId)))
+                    info.updateStatus(DownloadPhase.COMPLETE)
+                    info.setProgress(1f)
+                    downloadJobs[appId] = info
+                    
                     if (allowPersistedProgress) {
                         Timber.i("Resume became a no-op; clearing stale persisted resume state")
                         clearFailedResumeState(appId)
                     }
-                    // Cleanup: remove the in-progress marker if we're aborting before starting the coroutine
+                    
                     MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+                    MarkerUtils.addMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
+                    
+                    // Show success message to user
                     instance?.let { service ->
                         service.scope.launch(Dispatchers.Main) {
-                            Toast.makeText(service.applicationContext, "No depots selected for download", Toast.LENGTH_LONG).show()
+                            Toast.makeText(service.applicationContext, "Download complete", Toast.LENGTH_SHORT).show()
                         }
                     }
-                    return null
+                    
+                    return info
                 }
 
                 // Snapshot says all depots are complete but marker is missing.
@@ -1986,13 +2076,15 @@ class SteamService : Service(), IChallengeUrlChanged {
                     (hasCompleteMarker || hasPersistedResumeRow)
                 if (canFinalizeFromSnapshot) {
                     Timber.i("All resume depots appear complete from snapshot; finalizing without downloader")
-                    finalizeSnapshotResumeAsComplete(
+                    val info = finalizeSnapshotResumeAsComplete(
                         appId = appId,
                         appDirPath = appDirPath,
                         mainAppDepots = preSnapshotMainAppDepots,
                         dlcAppDepots = dlcAppDepots,
                         userSelectedDlcAppIds = userSelectedDlcAppIds,
                     )
+                    MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+                    return info
                 } else {
                     if (allowPersistedProgress) {
                         if (fullyDownloadedDepotsFromSnapshot.isNotEmpty()) {
@@ -2052,14 +2144,35 @@ class SteamService : Service(), IChallengeUrlChanged {
             Timber.i("DLC contains ${dlcAppDepots.size} depot(s): ${dlcAppDepots.keys}")
             Timber.i("downloadingAppIds: $downloadingAppIds")
 
+            val service = instance ?: run {
+                Timber.e("SteamService instance is null, cannot start download job.")
+                return null
+            }
+
             // Save downloading app info
             runBlocking {
-                instance?.downloadingAppInfoDao?.insert(
+                service.downloadingAppInfoDao.insert(
                     DownloadingAppInfo(
                         appId,
                         dlcAppIds = userSelectedDlcAppIds
                     ),
                 )
+                Unit
+            }
+
+            val maxParallel = PrefManager.downloadQueueSize
+            val activeCount = downloadJobs.values.count { it.isActive() && it.getStatusFlow().value != DownloadPhase.QUEUED }
+
+            if (activeCount >= maxParallel) {
+                Timber.i("Download limit reached ($maxParallel), queuing appId: $appId")
+                val info = DownloadInfo(selectedDepots.size, appId, downloadingAppIds).also { di ->
+                    di.setPersistencePath(appDirPath)
+                    di.updateStatus(DownloadPhase.QUEUED, "Queued...")
+                    di.setActive(false)
+                }
+                downloadJobs[appId] = info
+                notifyDownloadStarted(appId)
+                return info
             }
 
             val info = DownloadInfo(selectedDepots.size, appId, downloadingAppIds).also { di ->
@@ -2105,7 +2218,7 @@ class SteamService : Service(), IChallengeUrlChanged {
                     Timber.i("Resumed download: initialized with $resumedBytes bytes")
                 }
 
-                val downloadJob = instance!!.scope.launch {
+                val downloadJob = service.scope.launch {
                     var depotDownloader: DepotDownloader? = null
                     try {
                         // Retry loop for transient Steam API failures (AsyncJobFailedException) or missing client
@@ -2301,10 +2414,32 @@ class SteamService : Service(), IChallengeUrlChanged {
 
                                 Timber.i("Downloading game to $appDirPath (attempt $attempt)")
 
-                                // Wait for completion
-                                depotDownloader!!.getCompletion().await()
+                                // Wait for completion - safely handle the deferred result to avoid Unit cast errors
+                                try {
+                                    val completion = depotDownloader?.getCompletion()
+                                    if (completion is kotlinx.coroutines.Deferred<*>) {
+                                        Timber.i("Waiting for DepotDownloader Deferred completion...")
+                                        completion.await()
+                                    } else if (completion != null) {
+                                        // If it's a CompletableFuture or other type, try to join it
+                                        Timber.i("Downloader completion is ${completion.javaClass.simpleName}, waiting...")
+                                        if (completion is java.util.concurrent.CompletableFuture<*>) {
+                                            completion.join()
+                                        }
+                                    } else {
+                                        Timber.i("Downloader completion is null, assuming immediate success")
+                                    }
+                                } catch (e: Exception) {
+                                    if (e is CancellationException) throw e
+                                    Timber.w(e, "DepotDownloader completion await encountered an error")
+                                }
                                 
                                 Timber.i("DepotDownloader finished for appId: $appId")
+
+                                // If it was extremely fast (e.g. already downloaded), ensure some visibility in UI
+                                if (di.getProgress() >= 1.0f) {
+                                    delay(1000)
+                                }
 
                                 // If we got here without exception, download succeeded
                                 break
@@ -2328,6 +2463,7 @@ class SteamService : Service(), IChallengeUrlChanged {
                         // Complete app download - Wrap in try-catch to ensure we don't crash at the finish line
                         try {
                             di.updateStatusMessage("Finalizing installation...")
+                            Timber.i("Finalizing installation at path: $appDirPath")
                             if (originalMainAppDepots.isNotEmpty()) {
                                 val mainAppDepotIds = originalMainAppDepots.keys.sorted()
                                 completeAppDownload(di, appId, mainAppDepotIds, mainAppDlcIds, appDirPath)
@@ -2338,6 +2474,14 @@ class SteamService : Service(), IChallengeUrlChanged {
                                 completeAppDownload(di, dlcAppId, dlcDepotIds, emptyList(), appDirPath)
                             }
                             Timber.i("Installation finalized for appId: $appId")
+
+                            // Show success message to user
+                            instance?.let { service ->
+                                service.scope.launch(Dispatchers.Main) {
+                                    Toast.makeText(service.applicationContext, "Download complete", Toast.LENGTH_SHORT).show()
+                                    Unit
+                                }
+                            }
                         } catch (e: Exception) {
                             Timber.e(e, "Error during finalize/database update for appId: $appId")
                             throw e
@@ -2349,7 +2493,9 @@ class SteamService : Service(), IChallengeUrlChanged {
                         // Remove the downloading app info
                         runBlocking {
                             instance?.downloadingAppInfoDao?.deleteApp(appId)
+                            Unit
                         }
+                        Unit
                     } catch (e: DownloadFailedException) {
                         Timber.d(e, "Download failed for app $appId via cancellation")
                         clearFailedResumeState(appId)
@@ -2374,29 +2520,41 @@ class SteamService : Service(), IChallengeUrlChanged {
                     } catch (e: Exception) {
                         Timber.e(e, "Download failed for app $appId")
                         clearFailedResumeState(appId)
-                        di.updateStatus(DownloadPhase.FAILED)
+
+                        val errorMsg = when (e) {
+                            is ClassCastException -> "Casting error: ${e.message}"
+                            is NullPointerException -> "Null reference: ${e.message}"
+                            else -> e.localizedMessage ?: e.message ?: e.javaClass.simpleName
+                        }
+
+                        di.updateStatus(DownloadPhase.FAILED, "Failed: $errorMsg")
                         di.setActive(false)
                         // Clean up markers and DB state
                         MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
                         runBlocking {
                             instance?.downloadingAppInfoDao?.deleteApp(appId)
+                            Unit
                         }
                         removeDownloadJob(appId)
                         // Show error to user
-                        val errorMsg = e.localizedMessage ?: e.message ?: e.javaClass.simpleName
                         instance?.let { service ->
                             service.scope.launch(Dispatchers.Main) {
                                 Toast.makeText(service.applicationContext, "Download failed: $errorMsg", Toast.LENGTH_LONG).show()
+                                Unit
                             }
                         }
                         PluviaApp.events.emit(AndroidEvent.DownloadStatusChanged(appId, false))
+                        Unit
                     } finally {
                         runCatching {
                             depotDownloader?.close()
+                            Unit
                         }.onFailure { closeError ->
                             Timber.w(closeError, "Failed to close downloader for app $appId")
                         }
+                        Unit
                     }
+                    Unit
                 }
                 downloadJob.invokeOnCompletion { throwable ->
                     if (throwable is CancellationException && throwable !is DownloadFailedException) {
@@ -2421,7 +2579,7 @@ class SteamService : Service(), IChallengeUrlChanged {
             mainAppDepots: Map<Int, DepotInfo>,
             dlcAppDepots: Map<Int, DepotInfo>,
             userSelectedDlcAppIds: List<Int>,
-        ) {
+        ): DownloadInfo {
             val downloadingAppIds = CopyOnWriteArrayList<Int>()
             val calculatedDlcAppIds = CopyOnWriteArrayList<Int>()
             val allDepotIdsByDlcAppId = dlcAppDepots.values
@@ -2435,29 +2593,27 @@ class SteamService : Service(), IChallengeUrlChanged {
                 }
             }
 
-            if (mainAppDepots.isNotEmpty()) {
+            // Add main app ID if there are main app depots
+            if (mainAppDepots.isNotEmpty() && !downloadingAppIds.contains(appId)) {
                 downloadingAppIds.add(appId)
             }
+
+            val info = DownloadInfo(1, appId, downloadingAppIds)
+            info.setPersistencePath(appDirPath)
+            info.updateStatus(DownloadPhase.COMPLETE)
+            info.setProgress(1f)
+            downloadJobs[appId] = info
+            notifyDownloadStarted(appId)
 
             val mainAppDlcIds = getMainAppDlcIdsWithoutProperDepotDlcIds(appId)
             if (dlcAppDepots.isEmpty()) {
                 mainAppDlcIds.addAll(mainAppDepots.filter { it.value.dlcAppId != INVALID_APP_ID }.map { it.value.dlcAppId }.distinct())
-                calculatedDlcAppIds.clear()
-                downloadingAppIds.clear()
-                downloadingAppIds.add(appId)
             }
-
-            val syntheticInfo = DownloadInfo(
-                jobCount = 1,
-                gameId = appId,
-                downloadingAppIds = downloadingAppIds,
-            )
-            syntheticInfo.setPersistencePath(appDirPath)
 
             runBlocking(Dispatchers.IO) {
                 if (mainAppDepots.isNotEmpty()) {
                     completeAppDownload(
-                        downloadInfo = syntheticInfo,
+                        downloadInfo = info,
                         downloadingAppId = appId,
                         entitledDepotIds = mainAppDepots.keys.sorted(),
                         selectedDlcAppIds = mainAppDlcIds,
@@ -2468,7 +2624,7 @@ class SteamService : Service(), IChallengeUrlChanged {
                 calculatedDlcAppIds.forEach { dlcAppId ->
                     val dlcDepotIds = allDepotIdsByDlcAppId[dlcAppId].orEmpty()
                     completeAppDownload(
-                        downloadInfo = syntheticInfo,
+                        downloadInfo = info,
                         downloadingAppId = dlcAppId,
                         entitledDepotIds = dlcDepotIds,
                         selectedDlcAppIds = emptyList(),
@@ -2477,9 +2633,18 @@ class SteamService : Service(), IChallengeUrlChanged {
                 }
 
                 instance?.downloadingAppInfoDao?.deleteApp(appId)
+                Unit
             }
-        }
 
+            // Show success message to user for no-op/resume completion
+            instance?.let { service ->
+                service.scope.launch(Dispatchers.Main) {
+                    Toast.makeText(service.applicationContext, "Download complete", Toast.LENGTH_SHORT).show()
+                    Unit
+                }
+            }
+            return info
+        }
         private suspend fun completeAppDownload(
             downloadInfo: DownloadInfo,
             downloadingAppId: Int,
@@ -2516,11 +2681,16 @@ class SteamService : Service(), IChallengeUrlChanged {
                 )
             }
 
-            // Remove completed appId from downloadInfo.dlcAppIds
-            downloadInfo.downloadingAppIds.removeIf { it == downloadingAppId }
+            // Remove completed appId from downloadInfo.dlcAppIds and check if it was actually removed
+            val wasRemoved = downloadInfo.downloadingAppIds.remove(downloadingAppId)
+            if (!wasRemoved) {
+                Timber.d("Item $downloadingAppId was already removed from downloading list, skipping redundant completion.")
+                return
+            }
 
             // All downloading appIds are removed
             if (downloadInfo.downloadingAppIds.isEmpty()) {
+                Timber.i("All items for game ${downloadInfo.gameId} completed, running final completion logic.")
                 // If manifest-size top-up was deferred during depot completion, settle the
                 // remaining bytes once at the end to avoid visible mid-download jumps.
                 val totalExpectedBytes = downloadInfo.getTotalExpectedBytes()
@@ -2542,26 +2712,35 @@ class SteamService : Service(), IChallengeUrlChanged {
 
                     // Ensure the main app is marked as downloaded in the DB
                     val mainAppId = downloadInfo.gameId
-                    val mainAppInfo = instance?.appInfoDao?.getInstalledApp(mainAppId)
-                    if (mainAppInfo != null) {
-                        if (!mainAppInfo.isDownloaded) {
-                            instance?.appInfoDao?.update(mainAppInfo.copy(isDownloaded = true))
-                            Timber.i("Marked main app $mainAppId as downloaded in DB")
+                    val service = instance
+                    if (service != null) {
+                        val mainAppInfo = service.appInfoDao.getInstalledApp(mainAppId)
+                        if (mainAppInfo != null) {
+                            if (!mainAppInfo.isDownloaded) {
+                                service.appInfoDao.update(mainAppInfo.copy(isDownloaded = true))
+                                Timber.i("Marked main app $mainAppId as downloaded in DB")
+                            }
+                        } else {
+                            service.appInfoDao.insert(AppInfo(mainAppId, isDownloaded = true))
+                            Timber.i("Inserted main app $mainAppId as downloaded in DB")
                         }
-                    } else {
-                        instance?.appInfoDao?.insert(AppInfo(mainAppId, isDownloaded = true))
-                        Timber.i("Inserted main app $mainAppId as downloaded in DB")
                     }
+                    Unit
                 }
 
-                instance?.let { createSteamShortcut(it, downloadInfo.gameId) }
+                val service = instance
+                if (service != null) {
+                    createSteamShortcut(service, downloadInfo.gameId)
+                }
 
                 downloadInfo.updateStatus(DownloadPhase.COMPLETE)
                 PluviaApp.events.emit(AndroidEvent.LibraryInstallStatusChanged(downloadInfo.gameId))
 
                 // Clear persisted bytes file on successful completion
                 downloadInfo.clearPersistedBytesDownloaded(appDirPath, sync = true)
+                checkQueue()
             }
+            Unit
         }
 
         // onChunkCompleted reports GLOBAL cumulative bytes across all depots, not per depot.
@@ -2659,17 +2838,19 @@ class SteamService : Service(), IChallengeUrlChanged {
 
             override fun onItemAdded(item: DownloadItem) {
                 Timber.d("Item ${item.appId} added to queue")
+                Unit
             }
 
             override fun onDownloadStarted(item: DownloadItem) {
                 Timber.i("Item ${item.appId} download started")
                 downloadInfo.updateStatus(DownloadPhase.DOWNLOADING)
+                Unit
             }
 
             override fun onDownloadCompleted(item: DownloadItem) {
                 Timber.i("Item ${item.appId} download completed")
+                Unit
             }
-
             override fun onDownloadFailed(item: DownloadItem, error: Throwable) {
                 if (error is CancellationException && error !is DownloadFailedException) {
                     if (downloadInfo.isDeleting) {
@@ -2700,10 +2881,23 @@ class SteamService : Service(), IChallengeUrlChanged {
                         ).show()
                     }
                 }
+                Unit
             }
 
             override fun onStatusUpdate(message: String) {
                 Timber.d("Download status: $message")
+                
+                // Extract filename if present (usually "Downloading filename..." or "Verifying filename...")
+                if (message.startsWith("Downloading ", ignoreCase = true) || 
+                    message.startsWith("Verifying ", ignoreCase = true) ||
+                    message.startsWith("Patching ", ignoreCase = true)) {
+                    val parts = message.split(" ")
+                    if (parts.size > 1) {
+                        val fileName = parts[1].removeSuffix("...")
+                        downloadInfo.updateCurrentFileName(fileName)
+                    }
+                }
+
                 val mappedStatus = DownloadPhase.fromMessage(message)
                 if (mappedStatus != null) {
                     if (
@@ -2721,8 +2915,8 @@ class SteamService : Service(), IChallengeUrlChanged {
                 } else {
                     downloadInfo.updateStatusMessage(message)
                 }
+                Unit
             }
-
             override fun onChunkCompleted(
                 depotId: Int,
                 depotPercentComplete: Float,
@@ -2758,6 +2952,7 @@ class SteamService : Service(), IChallengeUrlChanged {
 
                 // Emit progress change
                 downloadInfo.emitProgressChange()
+                Unit
             }
 
             override fun onDepotCompleted(depotId: Int, compressedBytes: Long, uncompressedBytes: Long) {
@@ -2797,6 +2992,7 @@ class SteamService : Service(), IChallengeUrlChanged {
 
                 // Emit progress change
                 downloadInfo.emitProgressChange()
+                Unit
             }
         }
 
@@ -3245,7 +3441,25 @@ class SteamService : Service(), IChallengeUrlChanged {
 
                     val authSession = steamClient.authentication.beginAuthSessionViaCredentials(authDetails).await()
 
-                    val pollResult = authSession.pollingWaitForResult().await()
+                    Timber.d("Polling for authentication result. Interval: ${authSession.pollingInterval}s")
+
+                    var pollResult: AuthPollResult? = null
+                    while (pollResult == null) {
+                        try {
+                            pollResult = authSession.pollAuthSessionStatus().await()
+                        } catch (e: Exception) {
+                            Timber.e(e, "Poll auth session status error")
+                            throw e
+                        }
+
+                        if (pollResult == null) {
+                            Timber.v("Still waiting for authentication...")
+                            // Convert pollingInterval (seconds) to milliseconds for delay
+                            delay(authSession.pollingInterval.toLong() * 1000L)
+                        }
+                    }
+
+                    Timber.i("Authentication successful for ${pollResult.accountName}")
 
                     if (pollResult.accountName.isEmpty() && pollResult.refreshToken.isEmpty()) {
                         throw Exception("No account name or refresh token received.")
@@ -3322,7 +3536,9 @@ class SteamService : Service(), IChallengeUrlChanged {
 //                            )
 //                        }
 
-                        delay(authSession.pollingInterval.toLong())
+                        if (authPollResult == null) {
+                            delay(authSession.pollingInterval.toLong() * 1000L)
+                        }
                     }
 
                     isWaitingForQRAuth = false
@@ -3368,6 +3584,15 @@ class SteamService : Service(), IChallengeUrlChanged {
             isWaitingForQRAuth = false
         }
 
+        fun start(context: Context) {
+            try {
+                val intent = Intent(context, SteamService::class.java)
+                context.startForegroundService(intent)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to start SteamService")
+            }
+        }
+
         fun stop() {
             instance?.let { steamInstance ->
                 steamInstance.scope.launch {
@@ -3398,7 +3623,7 @@ class SteamService : Service(), IChallengeUrlChanged {
         }
 
         private fun clearUserData() {
-            PrefManager.clearPreferences()
+            PrefManager.clearAuthTokens()
 
             clearDatabase()
         }
@@ -3407,9 +3632,12 @@ class SteamService : Service(), IChallengeUrlChanged {
             with(instance!!) {
                 scope.launch {
                     db.withTransaction {
-                        appDao.deleteAll()
-                        changeNumbersDao.deleteAll()
-                        fileChangeListsDao.deleteAll()
+                        // We NO LONGER delete apps, change numbers, or file lists here.
+                        // This preserves the installed games and shortcuts.
+                        // appDao.deleteAll()
+                        // changeNumbersDao.deleteAll()
+                        // fileChangeListsDao.deleteAll()
+                        
                         licenseDao.deleteAll()
                         encryptedAppTicketDao.deleteAll()
                         downloadingAppInfoDao.deleteAll()

@@ -10,6 +10,7 @@
 
     <!-- Sidebar: static header + scrollable nav -->
     <LinearLayout
+        android:id="@+id/LLSidebar"
         android:layout_width="220dp"
         android:layout_height="match_parent"
         android:orientation="vertical"

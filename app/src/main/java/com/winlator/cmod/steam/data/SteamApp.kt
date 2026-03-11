@@ -142,6 +142,9 @@ data class SteamApp(
     @ColumnInfo("ufs")
     val ufs: UFS = UFS(),
 ) {
+    companion object {
+        const val STEAM_URL = "https://shared.steamstatic.com/store_item_assets/steam/apps"
+    }
 
     val logoUrl: String
         get() = "https://steamcdn-a.akamaihd.net/steamcommunity/public/images/apps/$id/$logoHash.jpg"
@@ -153,53 +156,72 @@ data class SteamApp(
         get() = "https://steamcdn-a.akamaihd.net/steamcommunity/public/images/apps/$id/$clientIconHash.ico"
     val clientTgaUrl: String
         get() = "https://steamcdn-a.akamaihd.net/steamcommunity/public/images/apps/$id/$clientTgaHash.tga"
+    val headerUrl: String
+        get() = "$STEAM_URL/$id/header.jpg"
 
     // source: https://github.com/Nemirtingas/games-infos/blob/3915100198bac34553b3c862f9e295d277f5520a/steam_retriever/Program.cs#L589C43-L589C89
     fun getSmallCapsuleUrl(language: Language = Language.english): String {
         return smallCapsule[language]?.takeIf { it.isNotEmpty() }?.let {
-            "https://cdn.akamai.steamstatic.com/steam/apps/$id/$it"
-        } ?: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/$id/capsule_231x87.jpg"
+            "$STEAM_URL/$id/$it"
+        } ?: "$STEAM_URL/$id/capsule_231x87.jpg"
     }
 
     fun getHeaderImageUrl(language: Language = Language.english): String {
         return headerImage[language]?.takeIf { it.isNotEmpty() }?.let {
-            "https://cdn.akamai.steamstatic.com/steam/apps/$id/$it"
-        } ?: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/$id/header.jpg"
+            "$STEAM_URL/$id/$it"
+        } ?: headerUrl
     }
 
     fun getCapsuleUrl(language: Language = Language.english, large: Boolean = false): String {
-        return if (large) {
-            libraryAssets.libraryCapsule.image2x[language]?.takeIf { it.isNotEmpty() }?.let {
-                "https://cdn.akamai.steamstatic.com/steam/apps/$id/$it"
-            } ?: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/$id/library_600x900.jpg"
+        val capsules = if (large) libraryAssets.libraryCapsule.image2x else libraryAssets.libraryCapsule.image
+        
+        val imageLink = if (capsules.containsKey(language)) {
+            capsules[language]
+        } else if (capsules.isNotEmpty()) {
+            capsules.values.first()
+        } else if (headerImage.containsKey(language)) {
+            headerImage[language]
+        } else if (headerImage.isNotEmpty()) {
+            headerImage.values.first()
         } else {
-            libraryAssets.libraryCapsule.image[language]?.takeIf { it.isNotEmpty() }?.let {
-                "https://cdn.akamai.steamstatic.com/steam/apps/$id/$it"
-            } ?: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/$id/library_600x900.jpg"
+            null
         }
+
+        return imageLink?.takeIf { it.isNotEmpty() }?.let { "$STEAM_URL/$id/$it" } 
+            ?: "$STEAM_URL/$id/library_600x900.jpg"
     }
 
     fun getHeroUrl(language: Language = Language.english, large: Boolean = false): String {
-        return if (large) {
-            libraryAssets.libraryHero.image2x[language]?.takeIf { it.isNotEmpty() }?.let {
-                "https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/$id/$it"
-            } ?: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/$id/library_hero.jpg"
+        val images = if (large) libraryAssets.libraryHero.image2x else libraryAssets.libraryHero.image
+
+        val imageLink = if (images.containsKey(language)) {
+            images[language]
+        } else if (images.isNotEmpty()) {
+            images.values.first()
+        } else if (headerImage.containsKey(language)) {
+            headerImage[language]
+        } else if (headerImage.isNotEmpty()) {
+            headerImage.values.first()
         } else {
-            libraryAssets.libraryHero.image[language]?.takeIf { it.isNotEmpty() }?.let {
-                "https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/$id/$it"
-            } ?: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/$id/library_hero.jpg"
+            null
         }
+
+        return imageLink?.takeIf { it.isNotEmpty() }?.let { "$STEAM_URL/$id/$it" }
+            ?: "$STEAM_URL/$id/library_hero.jpg"
     }
 
     fun getLogoUrl(language: Language = Language.english, large: Boolean = false): String {
-        return if (large) {
-            libraryAssets.libraryLogo.image2x[language]?.takeIf { it.isNotEmpty() }?.let {
-                "https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/$id/$it"
-            } ?: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/$id/logo.png"
+        val images = if (large) libraryAssets.libraryLogo.image2x else libraryAssets.libraryLogo.image
+
+        val imageLink = if (images.containsKey(language)) {
+            images[language]
+        } else if (images.isNotEmpty()) {
+            images.values.first()
         } else {
-            libraryAssets.libraryLogo.image[language]?.takeIf { it.isNotEmpty() }?.let {
-                "https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/$id/$it"
-            } ?: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/$id/logo.png"
+            null
         }
+
+        return imageLink?.takeIf { it.isNotEmpty() }?.let { "$STEAM_URL/$id/$it" }
+            ?: "$STEAM_URL/$id/logo.png"
     }
 }

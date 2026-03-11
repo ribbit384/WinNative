@@ -144,6 +144,17 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
 
     private void handleIntent(Intent intent) {
         if (intent == null) return;
+        
+        View sidebar = findViewById(R.id.LLSidebar);
+        boolean hideSidebar = intent.hasExtra("edit_shortcut_path") || 
+                            intent.hasExtra("create_shortcut_for_app_id") || 
+                            intent.hasExtra("create_shortcut_for_epic_id") ||
+                            intent.hasExtra("create_shortcut_for_app_name");
+
+        if (sidebar != null) {
+            sidebar.setVisibility(hideSidebar ? View.GONE : View.VISIBLE);
+        }
+
         String editShortcutPath = intent.getStringExtra("edit_shortcut_path");
         if (editShortcutPath != null) {
             File shortcutFile = new File(editShortcutPath);

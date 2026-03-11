@@ -75,9 +75,10 @@
 
         <activity
             android:name="com.winlator.cmod.steam.SteamLoginActivity"
-            android:theme="@style/AppTheme.Dark"
-            android:screenOrientation="sensor"
-            android:exported="false" />
+            android:theme="@style/AppThemeFullscreen.Dark"
+            android:screenOrientation="sensorLandscape"
+            android:exported="false"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|navigation" />
 
         <activity
             android:name="com.winlator.cmod.epic.ui.auth.EpicOAuthActivity"

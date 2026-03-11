@@ -12,6 +12,8 @@ enum class DownloadPhase {
     PATCHING,
     APPLYING_DATA,
     FINALIZING,
+    QUEUED,
+    UNPACKING,
     COMPLETE,
     ;
 

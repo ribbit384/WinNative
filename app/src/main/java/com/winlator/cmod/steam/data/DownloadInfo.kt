@@ -48,6 +48,7 @@ class DownloadInfo(
     @Volatile private var isActive: Boolean = true
     private val status = MutableStateFlow(DownloadPhase.UNKNOWN)
     private val statusMessage = MutableStateFlow<String?>(null)
+    private val currentFileName = MutableStateFlow<String?>(null)
     private var retryCount: Int = 0
     private var maxRetries: Int = 3
     private var hasError: Boolean = false
@@ -224,6 +225,12 @@ class DownloadInfo(
     fun getStatusFlow(): StateFlow<DownloadPhase> = status
 
     fun getStatusMessageFlow(): StateFlow<String?> = statusMessage
+
+    fun getCurrentFileNameFlow(): StateFlow<String?> = currentFileName
+
+    fun updateCurrentFileName(name: String?) {
+        currentFileName.value = name
+    }
 
     private fun addSpeedSample(timestampMs: Long, currentBytes: Long) {
         synchronized(speedSamples) {

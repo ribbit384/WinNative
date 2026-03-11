@@ -3,7 +3,12 @@ package com.winlator.cmod.epic.service
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.IBinder
+import com.winlator.cmod.R
 import com.winlator.cmod.steam.data.DownloadInfo
 import com.winlator.cmod.epic.data.EpicCredentials
 import com.winlator.cmod.epic.data.EpicGame
@@ -14,6 +19,7 @@ import com.winlator.cmod.steam.enums.Marker
 import com.winlator.cmod.steam.events.AndroidEvent
 import com.winlator.cmod.PluviaApp
 import com.winlator.cmod.steam.utils.ContainerUtils
+import com.winlator.cmod.steam.utils.PrefManager
 import com.winlator.cmod.utils.NotificationHelper
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
@@ -45,6 +51,8 @@ class EpicService : Service() {
 
         val isRunning: Boolean
             get() = instance != null
+
+        val isWifiConnected: Boolean get() = com.winlator.cmod.utils.NetworkMonitor.isWifiConnected.value
 
         fun start(context: Context) {
 
@@ -549,6 +557,9 @@ class EpicService : Service() {
 
     private val onEndProcess: (AndroidEvent.EndProcess) -> Unit = { stop() }
 
+    private lateinit var connectivityManager: ConnectivityManager
+    private lateinit var networkCallback: ConnectivityManager.NetworkCallback
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -557,6 +568,27 @@ class EpicService : Service() {
         // Initialize notification helper for foreground service
         notificationHelper = NotificationHelper(applicationContext)
         PluviaApp.events.on<AndroidEvent.EndProcess, Unit>(onEndProcess)
+
+        // pause downloads when WiFi/Ethernet is lost
+        connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onLost(network: Network) {
+                if (PrefManager.downloadOnWifiOnly && !isWifiConnected) {
+                    for ((appId, info) in activeDownloads.entries.toList()) {
+                        Timber.tag("Epic").d("Cancelling job for appId $appId due to Wi-Fi loss")
+                        info.cancel()
+                        com.winlator.cmod.PluviaApp.events.emitJava(com.winlator.cmod.steam.events.AndroidEvent.DownloadPausedDueToConnectivity(appId))
+                        activeDownloads.remove(appId)
+                    }
+                    notificationHelper.notify(getString(R.string.download_paused_wifi))
+                }
+            }
+        }
+        val networkRequest = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+            .build()
+        connectivityManager.registerNetworkCallback(networkRequest, networkCallback)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -637,6 +669,11 @@ class EpicService : Service() {
         super.onDestroy()
         Timber.tag("Epic").i("[EpicService] Service destroyed")
         PluviaApp.events.off<AndroidEvent.EndProcess, Unit>(onEndProcess)
+
+        // Unregister Wi-Fi connectivity callback
+        if (::connectivityManager.isInitialized && ::networkCallback.isInitialized) {
+            connectivityManager.unregisterNetworkCallback(networkCallback)
+        }
 
         // Cancel sync operations
         backgroundSyncJob?.cancel()

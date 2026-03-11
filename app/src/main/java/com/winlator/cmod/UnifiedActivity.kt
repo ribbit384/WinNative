@@ -3,8 +3,10 @@ package com.winlator.cmod
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Process
 import android.provider.DocumentsContract
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -89,6 +92,7 @@ import com.winlator.cmod.epic.data.EpicCredentials
 import com.winlator.cmod.epic.data.EpicGameToken
 import com.winlator.cmod.epic.service.EpicDownloadManager
 import com.winlator.cmod.epic.service.EpicManager
+import com.winlator.cmod.utils.ControllerHelper
 
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -118,9 +122,162 @@ class UnifiedActivity : ComponentActivity() {
     // Trigger to refresh library when activity resumes from another container
     var libraryRefreshSignal by mutableIntStateOf(0)
 
+    val rightStickScrollState = kotlinx.coroutines.flow.MutableStateFlow(0f)
+    val leftStickScrollState = kotlinx.coroutines.flow.MutableStateFlow(0f)
+    val keyEventFlow = kotlinx.coroutines.flow.MutableSharedFlow<android.view.KeyEvent>(extraBufferCapacity = 10)
+    // Flow for library carousel: -1 = scroll left, +1 = scroll right
+    val libraryScrollFlow = kotlinx.coroutines.flow.MutableSharedFlow<Int>(extraBufferCapacity = 1, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
+    private var lastLibraryMoveTime = 0L
+
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        val keyCode = event.keyCode
+        val action = event.action
+
+        // Intercept keys we handle globally to prevent fall-through (e.g. Start button launching a game)
+        val isHandledGlobally = when (keyCode) {
+            android.view.KeyEvent.KEYCODE_BUTTON_START,
+            android.view.KeyEvent.KEYCODE_BUTTON_A,
+            android.view.KeyEvent.KEYCODE_BUTTON_B,
+            android.view.KeyEvent.KEYCODE_BUTTON_X,
+            android.view.KeyEvent.KEYCODE_BUTTON_Y,
+            android.view.KeyEvent.KEYCODE_BUTTON_L1,
+            android.view.KeyEvent.KEYCODE_BUTTON_R1,
+            android.view.KeyEvent.KEYCODE_BUTTON_L2,
+            android.view.KeyEvent.KEYCODE_BUTTON_R2,
+            android.view.KeyEvent.KEYCODE_DPAD_CENTER -> true
+            else -> false
+        }
+
+        if (action == android.view.KeyEvent.ACTION_DOWN) {
+            val now = System.currentTimeMillis()
+            // Intercept D-pad left/right for library carousel scrolling IF we are on the library tab
+            // Throttle at the source to prevent double-triggers from crosstalk with hat axes
+            if (currentTabKey == "library" && (now - lastLibraryMoveTime > 200) && event.repeatCount == 0) {
+                when (keyCode) {
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        lastLibraryMoveTime = now
+                        libraryScrollFlow.tryEmit(-1)
+                        return true
+                    }
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        lastLibraryMoveTime = now
+                        libraryScrollFlow.tryEmit(1)
+                        return true
+                    }
+                }
+            }
+            if (isHandledGlobally) {
+                keyEventFlow.tryEmit(event)
+                return true
+            }
+        } else if (action == android.view.KeyEvent.ACTION_UP && isHandledGlobally) {
+            // Consume ACTION_UP for handled keys to ensure balanced event stream for super
+            return true
+        }
+        
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onResume() {
         super.onResume()
         libraryRefreshSignal++
+    }
+
+    override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean {
+        if ((event.source and android.view.InputDevice.SOURCE_JOYSTICK) == android.view.InputDevice.SOURCE_JOYSTICK &&
+            event.action == android.view.MotionEvent.ACTION_MOVE) {
+            
+            // Handle Right Joystick Y axis for scrolling in stores
+            val rz = event.getAxisValue(android.view.MotionEvent.AXIS_RZ)
+            rightStickScrollState.value = rz
+
+            // Handle Left Joystick Y axis for scrolling in stores
+            val leftY = event.getAxisValue(android.view.MotionEvent.AXIS_Y)
+            leftStickScrollState.value = leftY
+
+            // Handle Left Joystick/D-pad to emulate KeyEvents for Compose Focus
+            val x = event.getAxisValue(android.view.MotionEvent.AXIS_X)
+            val y = event.getAxisValue(android.view.MotionEvent.AXIS_Y)
+            val hatX = event.getAxisValue(android.view.MotionEvent.AXIS_HAT_X)
+            val hatY = event.getAxisValue(android.view.MotionEvent.AXIS_HAT_Y)
+
+            val isJoystickLeft = x < -0.5f
+            val isJoystickRight = x > 0.5f
+            val isJoystickUp = y < -0.5f
+            val isJoystickDown = y > 0.5f
+
+            val isHatLeft = hatX < -0.5f
+            val isHatRight = hatX > 0.5f
+            val isHatUp = hatY < -0.5f
+            val isHatDown = hatY > 0.5f
+
+            val now = event.eventTime
+            
+            // Check if we are on the library tab to restrict movement
+            val isLibraryTab = currentTabKey == "library"
+            val isStoreTab = currentTabKey == "store" || currentTabKey == "steam" || currentTabKey == "epic"
+
+            // ── LIBRARY TAB: D-pad left/right scrolls carousel ──
+            if (isLibraryTab) {
+                // D-pad hat left/right scroll the carousel, throttled relative to shared move time
+                if (isHatLeft || isHatRight) {
+                    if (now - lastLibraryMoveTime > 200) {
+                        if (isHatLeft) libraryScrollFlow.tryEmit(-1)
+                        if (isHatRight) libraryScrollFlow.tryEmit(1)
+                        lastLibraryMoveTime = now
+                        lastHatMoveTime = now
+                        return true
+                    }
+                }
+                // Left joystick left/right also scrolls carousel
+                if (isJoystickLeft || isJoystickRight) {
+                    if (now - lastLibraryMoveTime > 300) {
+                        if (isJoystickLeft) libraryScrollFlow.tryEmit(-1)
+                        if (isJoystickRight) libraryScrollFlow.tryEmit(1)
+                        lastLibraryMoveTime = now
+                        lastJoystickMoveTime = now
+                        return true
+                    }
+                }
+            } else {
+                // ── NON-LIBRARY TABS: D-pad navigates focus ──
+                if (isHatLeft || isHatRight || isHatUp || isHatDown) {
+                    if (now - lastHatMoveTime > 150) {
+                        if (isHatLeft) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
+                        if (isHatRight) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
+                        if (isHatUp) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_UP)
+                        if (isHatDown) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_DOWN)
+                        lastHatMoveTime = now
+                        return true
+                    }
+                }
+
+                // Left Joystick in Store tabs: 75% slower throttle (2400ms vs normal 600ms)
+                // Non-store tabs: normal 600ms
+                val joystickThrottle = if (isStoreTab) 2400L else 600L
+                if (isJoystickLeft || isJoystickRight || isJoystickUp || isJoystickDown) {
+                    if (now - lastJoystickMoveTime > joystickThrottle) {
+                        if (isJoystickLeft) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
+                        if (isJoystickRight) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
+                        if (isJoystickUp) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_UP)
+                        if (isJoystickDown) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_DOWN)
+                        lastJoystickMoveTime = now
+                        return true
+                    }
+                }
+            }
+        }
+        return super.dispatchGenericMotionEvent(event)
+    }
+
+    private var currentTabKey: String = "library"
+
+    private var lastHatMoveTime = 0L
+    private var lastJoystickMoveTime = 0L
+
+    private fun injectKeyEvent(keyCode: Int) {
+        window.decorView.rootView.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, keyCode))
+        window.decorView.rootView.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, keyCode))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -131,6 +288,11 @@ class UnifiedActivity : ComponentActivity() {
         // Start EpicService if user is logged in
         if (EpicService.hasStoredCredentials(this)) {
             EpicService.start(this)
+        }
+
+        // Start SteamService if user is logged in
+        if (SteamService.isLoggedIn) {
+            SteamService.start(this)
         }
 
         window.navigationBarColor = 0xFF0D1117.toInt()
@@ -168,6 +330,7 @@ class UnifiedActivity : ComponentActivity() {
         var aioMode by remember { mutableStateOf(PrefManager.aioStoreMode) }
         val storeVisible = remember { mutableStateMapOf("steam" to true, "epic" to true, "gog" to true, "amazon" to true) }
         var showAddCustomGame by remember { mutableStateOf(false) }
+        var showExitDialog by remember { mutableStateOf(false) }
         var libraryRefreshKey by remember { mutableIntStateOf(0) }
         
         val currentRefreshSignal = this@UnifiedActivity.libraryRefreshSignal
@@ -178,6 +341,7 @@ class UnifiedActivity : ComponentActivity() {
         val contentFilters = remember { mutableStateMapOf("games" to true, "dlc" to false, "applications" to false, "tools" to false) }
         val tabs = remember(aioMode, storeVisible.toMap()) { buildTabs(aioMode, storeVisible) }
         var selectedIdx by rememberSaveable { mutableIntStateOf(0) }
+        var selectedDownloadId by remember { mutableStateOf<String?>(null) }
         var showFilter by remember { mutableStateOf(false) }
         val isLoggedIn by SteamService.isLoggedInFlow.collectAsState()
         val isEpicLoggedIn by EpicAuthManager.isLoggedInFlow.collectAsState()
@@ -191,6 +355,18 @@ class UnifiedActivity : ComponentActivity() {
         val epicApps by remember(libraryRefreshKey) { 
             db.epicGameDao().getAll() 
         }.collectAsState(initial = emptyList())
+
+        var isControllerConnected by remember { mutableStateOf(ControllerHelper.isControllerConnected()) }
+        val isPS = remember(isControllerConnected) { ControllerHelper.isPlayStationController() }
+        val isLibraryTab = tabs.getOrNull(selectedIdx)?.key == "library"
+
+        // Refresh controller state periodically
+        LaunchedEffect(Unit) {
+            while(true) {
+                isControllerConnected = ControllerHelper.isControllerConnected()
+                kotlinx.coroutines.delay(2000)
+            }
+        }
 
         // Observe library install status changes to refresh UI
         LaunchedEffect(Unit) {
@@ -256,9 +432,96 @@ class UnifiedActivity : ComponentActivity() {
         LaunchedEffect(tabs.size) { if (selectedIdx >= tabs.size) selectedIdx = 0 }
         LaunchedEffect(Unit) { SteamService.requestUserPersona() }
 
+        val activity = LocalContext.current as? UnifiedActivity
+        val listState = rememberLazyListState(initialFirstVisibleItemIndex = 0)
+        
+        LaunchedEffect(tabs) {
+            activity?.keyEventFlow?.collect { event ->
+                val key = tabs.getOrNull(selectedIdx)?.key ?: "library"
+                when (event.keyCode) {
+                    android.view.KeyEvent.KEYCODE_BUTTON_L1 -> {
+                        selectedIdx = if (selectedIdx > 0) selectedIdx - 1 else tabs.size - 1
+                    }
+                    android.view.KeyEvent.KEYCODE_BUTTON_R1 -> {
+                        selectedIdx = (selectedIdx + 1) % tabs.size
+                    }
+                    android.view.KeyEvent.KEYCODE_BUTTON_START -> {
+                        val intent = Intent(context, MainActivity::class.java)
+                        intent.putExtra("selected_menu_item_id", R.id.main_menu_stores)
+                        intent.putExtra("return_to_unified", true)
+                        context.startActivity(intent)
+                    }
+                    android.view.KeyEvent.KEYCODE_BUTTON_X -> {
+                        if (key != "downloads") {
+                            showFilter = !showFilter
+                        }
+                    }
+                    android.view.KeyEvent.KEYCODE_BUTTON_B -> {
+                        // Close menus in order, or show exit confirmation if none are open
+                        if (showFilter) showFilter = false
+                        else if (globalSettingsApp != null) globalSettingsApp = null
+                        else if (showAddCustomGame) showAddCustomGame = false
+                        else showExitDialog = true
+                    }
+                    android.view.KeyEvent.KEYCODE_BUTTON_Y -> {
+                        if (key == "library" && selectedSteamAppId != 0) {
+                            val isCustom = selectedSteamAppId < 0
+                            val epicId = if (selectedSteamAppId >= 2000000000) selectedSteamAppId - 2000000000 else 0
+                            
+                            // Handle Steam, Custom, and Epic semi-unified logic for the settings dialog trigger
+                            globalSettingsApp = (steamApps.find { it.id == selectedSteamAppId }
+                                ?: if (isCustom) {
+                                    SteamApp(id = selectedSteamAppId, name = selectedSteamAppName, developer = "Custom")
+                                } else if (epicId > 0) {
+                                    val epic = epicApps.find { it.id == epicId }
+                                    SteamApp(
+                                        id = selectedSteamAppId,
+                                        name = selectedSteamAppName,
+                                        developer = epic?.developer ?: "Epic Games",
+                                        gameDir = epic?.installPath ?: ""
+                                    )
+                                } else null)
+                        }
+                    }
+                    android.view.KeyEvent.KEYCODE_BUTTON_A, android.view.KeyEvent.KEYCODE_DPAD_CENTER -> {
+                        if (key == "library" && selectedSteamAppId != 0) {
+                            val isCustom = selectedSteamAppId < 0
+                            val epicId = if (selectedSteamAppId >= 2000000000) selectedSteamAppId - 2000000000 else 0
+                            val containerManager = ContainerManager(context)
+                            if (isCustom) {
+                                launchCustomGame(context, containerManager, selectedSteamAppName)
+                            } else if (epicId > 0) {
+                                val epic = epicApps.find { it.id == epicId }
+                                if (epic != null && epic.isInstalled) {
+                                    val dummyApp = SteamApp(id = selectedSteamAppId, name = selectedSteamAppName, gameDir = epic.installPath)
+                                    launchSteamGame(context, containerManager, dummyApp)
+                                }
+                            } else {
+                                val steam = steamApps.find { it.id == selectedSteamAppId }
+                                if (steam != null && SteamService.isAppInstalled(steam.id)) {
+                                    launchSteamGame(context, containerManager, steam)
+                                }
+                            }
+                        }
+                    }
+                    android.view.KeyEvent.KEYCODE_BUTTON_L2 -> {
+                        if (key == "downloads") {
+                            val anyActive = DownloadService.getAllDownloads().any { it.second.isActive() }
+                            if (anyActive) SteamService.pauseAll() else SteamService.resumeAll()
+                        }
+                    }
+                    android.view.KeyEvent.KEYCODE_BUTTON_R2 -> {
+                        if (key == "downloads") {
+                            SteamService.cancelAll()
+                        }
+                    }
+                }
+            }
+        }
+
         Scaffold(
             containerColor = BgDark,
-            topBar = { TopBar(tabs, selectedIdx, { selectedIdx = it }, persona, context, scope) {
+            topBar = { TopBar(tabs, selectedIdx, { selectedIdx = it }, persona, context, scope, isControllerConnected, isPS, isLibraryTab) {
                 // Try Steam apps first, then fall back to custom or epic pseudo-apps
                 globalSettingsApp = (steamApps.find { it.id == selectedSteamAppId }
                     ?: if (selectedSteamAppId < 0) {
@@ -280,12 +543,18 @@ class UnifiedActivity : ComponentActivity() {
                     } else null)
             } }
         ) { padding ->
+            LaunchedEffect(selectedIdx, tabs) {
+                currentTabKey = tabs.getOrNull(selectedIdx)?.key ?: "library"
+            }
+
             Box(Modifier.padding(padding).fillMaxSize().background(BgDark)) {
                 val key = tabs.getOrNull(selectedIdx)?.key ?: "library"
+
                 when (key) {
                     "library" -> LibraryCarousel(isLoggedIn, filteredSteamApps, epicApps, libraryRefreshKey)
-                    "downloads" -> DownloadsTab()
+                    "downloads" -> DownloadsTab(selectedDownloadId, onSelectDownload = { selectedDownloadId = it })
                     "steam", "store" -> SteamStoreTab(isLoggedIn, filteredSteamApps)
+
                     "epic" -> EpicStoreTab(isEpicLoggedIn) {
                         epicLoginLauncher.launch(Intent(this@UnifiedActivity, EpicOAuthActivity::class.java))
                     }
@@ -293,39 +562,50 @@ class UnifiedActivity : ComponentActivity() {
                     "amazon" -> StorePlaceholderTab("Amazon Games")
                 }
 
-                // ── Bottom-left filter button ──
-                if (key != "downloads") {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(16.dp)
-                            .size(48.dp)
-                            .shadow(8.dp, CircleShape, spotColor = Color.Black.copy(alpha = 0.5f))
-                            .clip(CircleShape)
-                            .background(SurfaceDark)
-                            .clickable { showFilter = !showFilter },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Default.FilterList, contentDescription = "Filter", tint = TextPrimary, modifier = Modifier.size(24.dp))
-                    }
+        // ── Bottom-left filter button ──
+        if (key != "downloads") {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .shadow(8.dp, CircleShape, spotColor = Color.Black.copy(alpha = 0.5f))
+                        .clip(CircleShape)
+                        .background(SurfaceDark)
+                        .focusProperties { canFocus = !isLibraryTab }
+                        .clickable { showFilter = !showFilter },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.FilterList, contentDescription = "Filter", tint = TextPrimary, modifier = Modifier.size(24.dp))
                 }
+                if (isControllerConnected) {
+                    Spacer(Modifier.width(12.dp))
+                    ControllerBadge(if (isPS) "Square" else "X")
+                }
+            }
+        }
 
-                // ── Bottom-right Add Custom Game button ──
-                if (key == "library") {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(16.dp)
-                            .size(52.dp)
-                            .shadow(10.dp, CircleShape, spotColor = Accent.copy(alpha = 0.4f))
-                            .clip(CircleShape)
-                            .background(Accent)
-                            .clickable { showAddCustomGame = true },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = "Add Custom Game", tint = Color.White, modifier = Modifier.size(28.dp))
-                    }
-                }
+        // ── Bottom-right Add Custom Game button ──
+        if (key == "library") {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp)
+                    .size(52.dp)
+                    .shadow(10.dp, CircleShape, spotColor = Accent.copy(alpha = 0.4f))
+                    .clip(CircleShape)
+                    .background(Accent)
+                    .focusProperties { canFocus = false } // No specific button for this, handle via long press or touch
+                    .clickable { showAddCustomGame = true },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Add Custom Game", tint = Color.White, modifier = Modifier.size(28.dp))
+            }
+        }
 
                 // ── Filter popup dismissal background ──
                 if (showFilter) {
@@ -369,6 +649,74 @@ class UnifiedActivity : ComponentActivity() {
         if (showAddCustomGame) {
             AddCustomGameDialog(onDismiss = { showAddCustomGame = false; libraryRefreshKey++ })
         }
+
+        // ── Back button exit confirmation ──
+        BackHandler(enabled = true) {
+            // Consistent behavior: close overlays first, then show exit confirmation
+            if (showFilter) {
+                showFilter = false
+            } else if (globalSettingsApp != null) {
+                globalSettingsApp = null
+            } else if (showAddCustomGame) {
+                showAddCustomGame = false
+            } else {
+                showExitDialog = true
+            }
+        }
+
+        if (showExitDialog) {
+            Dialog(
+                onDismissRequest = { showExitDialog = false },
+                properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = true)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(320.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(SurfaceDark)
+                        .border(1.dp, Accent.copy(alpha = 0.3f), RoundedCornerShape(20.dp))
+                        .padding(28.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "Exit WinNative?",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(24.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            // Cancel button
+                            OutlinedButton(
+                                onClick = { showExitDialog = false },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, TextSecondary.copy(alpha = 0.5f)),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Cancel", fontWeight = FontWeight.Medium)
+                            }
+                            // Exit button
+                            Button(
+                                onClick = {
+                                    // Kill all WinNative processes and close fully
+                                    finishAffinity()
+                                    Process.killProcess(Process.myPid())
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935)),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Exit", color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // ─── Top bar ──────────────────────────────────────────────────────
@@ -380,6 +728,9 @@ class UnifiedActivity : ComponentActivity() {
         persona: com.winlator.cmod.steam.data.SteamFriend?,
         context: android.content.Context,
         scope: kotlinx.coroutines.CoroutineScope,
+        isControllerConnected: Boolean,
+        isPS: Boolean,
+        isLibraryTab: Boolean,
         onGameSettingsClicked: () -> Unit
     ) {
         var showStatusMenu by remember { mutableStateOf(false) }
@@ -393,32 +744,86 @@ class UnifiedActivity : ComponentActivity() {
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // ── Left: Settings button with circle shadow ──
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .shadow(6.dp, CircleShape, spotColor = Color.Black.copy(alpha = 0.5f))
-                    .clip(CircleShape)
-                    .background(SurfaceDark),
-                contentAlignment = Alignment.Center
+            // ── Left Block: Settings & Download Queue ──
+            Row(
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = {
-                    val intent = Intent(context, MainActivity::class.java)
-                    intent.putExtra("return_to_unified", true)
-                    context.startActivity(intent)
-                }, modifier = Modifier.size(44.dp)) {
-                    Icon(Icons.Default.Settings, contentDescription = "Menu", tint = TextPrimary, modifier = Modifier.size(24.dp))
+                // Settings Button
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .shadow(6.dp, CircleShape, spotColor = Color.Black.copy(alpha = 0.5f))
+                            .clip(CircleShape)
+                            .background(SurfaceDark)
+                            .focusProperties { canFocus = !isLibraryTab },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        IconButton(onClick = {
+                            val intent = Intent(context, MainActivity::class.java)
+                            intent.putExtra("selected_menu_item_id", R.id.main_menu_stores)
+                            intent.putExtra("return_to_unified", true)
+                            context.startActivity(intent)
+                        }, modifier = Modifier.size(44.dp), enabled = true) {
+                            Icon(Icons.Default.Settings, contentDescription = "Menu", tint = TextPrimary, modifier = Modifier.size(24.dp))
+                        }
+                    }
+                    if (isControllerConnected) {
+                        Spacer(Modifier.width(8.dp))
+                        ControllerBadge(if (isPS) "Options" else "Start")
+                    }
+                }
+
+                // Download Queue (Centered between Settings and Tabs)
+                if (tabs.getOrNull(selectedIdx)?.key == "downloads") {
+                    var queueSize by remember { mutableIntStateOf(PrefManager.downloadQueueSize) }
+                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = { if (queueSize > 1) { queueSize--; PrefManager.downloadQueueSize = queueSize } },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "Decrease Queue", tint = TextPrimary, modifier = Modifier.size(18.dp))
+                                }
+                                
+                                Text(
+                                    text = queueSize.toString(),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                )
+                                
+                                IconButton(
+                                    onClick = { queueSize++; PrefManager.downloadQueueSize = queueSize },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Increase Queue", tint = TextPrimary, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                            Text(
+                                text = "Download Queue",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary,
+                                fontSize = 8.sp
+                            )
+                        }
+                    }
+                } else {
+                    Spacer(Modifier.weight(1f))
                 }
             }
 
-            Spacer(Modifier.width(8.dp))
-
-            // ── Center: Adaptive tab bar with shadow pill ──
-            Box(
-                modifier = Modifier
-                    .weight(1f),
-                contentAlignment = Alignment.Center
+            // ── Center Block: Tabs ──
+            Row(
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                if (isControllerConnected) {
+                    ControllerBadge("L1")
+                    Spacer(Modifier.width(8.dp))
+                }
                 Row(
                     modifier = Modifier
                         .widthIn(max = 340.dp)
@@ -427,7 +832,8 @@ class UnifiedActivity : ComponentActivity() {
                         .clip(RoundedCornerShape(24.dp))
                         .background(SurfaceDark.copy(alpha = 0.85f))
                         .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 12.dp),
+                        .padding(horizontal = 12.dp)
+                        .focusProperties { canFocus = !isLibraryTab },
                     horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -458,110 +864,120 @@ class UnifiedActivity : ComponentActivity() {
                         }
                     }
                 }
-            }
-
-            Spacer(Modifier.width(8.dp))
-
-            val isStore = tabs[selectedIdx].label.contains("Store", ignoreCase = true)
-
-            // ── Right: Action button with circle shadow ──
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .shadow(6.dp, CircleShape, spotColor = Color.Black.copy(alpha = 0.5f))
-                    .clip(CircleShape)
-                    .background(SurfaceDark),
-                contentAlignment = Alignment.Center
-            ) {
-                if (isStore) {
-                    IconButton(onClick = { SteamService.requestSync() }, modifier = Modifier.size(44.dp)) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh Store", tint = TextPrimary, modifier = Modifier.size(24.dp))
-                    }
-                } else {
-                    IconButton(onClick = {
-                        if (selectedSteamAppId != 0) {
-                            onGameSettingsClicked()
-                        } else {
-                            android.widget.Toast.makeText(context, "Select a game from your library first", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    }, modifier = Modifier.size(44.dp)) {
-                        Icon(Icons.Default.Tune, contentDescription = "Game Settings", tint = TextPrimary, modifier = Modifier.size(24.dp))
-                    }
+                if (isControllerConnected) {
+                    Spacer(Modifier.width(8.dp))
+                    ControllerBadge("R1")
                 }
             }
 
-            Spacer(Modifier.width(4.dp))
-
-            // ── Right: Steam profile avatar with status picker ──
-            Box {
-                val avatarUrl = persona?.avatarHash?.getAvatarURL()
-                    ?: "https://steamcdn-a.akamaihd.net/steamcommunity/public/images/avatars/fe/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_full.jpg"
-
+            // ── Right Block: Status & Actions ──
+            Row(
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val isStore = tabs.getOrNull(selectedIdx)?.label?.contains("Store", ignoreCase = true) == true
+                if (isControllerConnected && !isStore) {
+                    ControllerBadge(if (isPS) "Triangle" else "Y")
+                    Spacer(Modifier.width(8.dp))
+                }
+                
                 Box(
                     modifier = Modifier
                         .size(44.dp)
                         .shadow(6.dp, CircleShape, spotColor = Color.Black.copy(alpha = 0.5f))
                         .clip(CircleShape)
-                        .clickable { showStatusMenu = true }
+                        .background(SurfaceDark)
+                        .focusProperties { canFocus = !isLibraryTab },
+                    contentAlignment = Alignment.Center
                 ) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(context).data(avatarUrl).crossfade(true).build(),
-                        contentDescription = "Profile",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                    // Status indicator dot
-                    val statusColor = when (currentState) {
-                        EPersonaState.Online -> StatusOnline
-                        EPersonaState.Away -> StatusAway
-                        else -> StatusOffline
+                    if (isStore) {
+                        IconButton(onClick = { SteamService.requestSync() }, modifier = Modifier.size(44.dp)) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh Store", tint = TextPrimary, modifier = Modifier.size(24.dp))
+                        }
+                    } else {
+                        IconButton(onClick = {
+                            if (selectedSteamAppId != 0) {
+                                onGameSettingsClicked()
+                            } else {
+                                android.widget.Toast.makeText(context, "Select a game from your library first", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }, modifier = Modifier.size(44.dp)) {
+                            Icon(Icons.Default.Tune, contentDescription = "Game Settings", tint = TextPrimary, modifier = Modifier.size(24.dp))
+                        }
                     }
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .align(Alignment.BottomEnd)
-                            .offset((-1).dp, (-1).dp)
-                            .background(BgDark, CircleShape)
-                            .padding(2.dp)
-                            .background(statusColor, CircleShape)
-                    )
                 }
 
-                // ── Status dropdown ──
-                DropdownMenu(
-                    expanded = showStatusMenu,
-                    onDismissRequest = { showStatusMenu = false },
-                    modifier = Modifier
-                        .width(200.dp)
-                        .background(SurfaceDark, RoundedCornerShape(12.dp))
-                ) {
-                    Text(
-                        "STATUS",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextSecondary,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
-                    listOf(
-                        Triple(EPersonaState.Online, "Online", StatusOnline),
-                        Triple(EPersonaState.Away, "Away", StatusAway),
-                        Triple(EPersonaState.Invisible, "Invisible", StatusOffline)
-                    ).forEach { (state, label, color) ->
-                        DropdownMenuItem(
-                            text = {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Box(Modifier.size(10.dp).background(color, CircleShape))
-                                    Text(label, color = TextPrimary)
-                                    Spacer(Modifier.weight(1f))
-                                    if (currentState == state) {
-                                        Icon(Icons.Default.Check, contentDescription = null, tint = Accent, modifier = Modifier.size(16.dp))
-                                    }
-                                }
-                            },
-                            onClick = {
-                                showStatusMenu = false
-                                scope.launch { SteamService.setPersonaState(state) }
-                            }
+                Spacer(Modifier.width(8.dp))
+
+                Box(modifier = Modifier.focusProperties { canFocus = !isLibraryTab }) {
+                    val avatarUrl = persona?.avatarHash?.getAvatarURL()
+                        ?: "https://steamcdn-a.akamaihd.net/steamcommunity/public/images/avatars/fe/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_full.jpg"
+
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .shadow(6.dp, CircleShape, spotColor = Color.Black.copy(alpha = 0.5f))
+                            .clip(CircleShape)
+                            .clickable { showStatusMenu = true }
+                    ) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(context).data(avatarUrl).crossfade(true).build(),
+                            contentDescription = "Profile",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
                         )
+                        val statusColor = when (currentState) {
+                            EPersonaState.Online -> StatusOnline
+                            EPersonaState.Away -> StatusAway
+                            else -> StatusOffline
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(12.dp)
+                                .align(Alignment.BottomEnd)
+                                .offset((-1).dp, (-1).dp)
+                                .background(BgDark, CircleShape)
+                                .padding(2.dp)
+                                .background(statusColor, CircleShape)
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = showStatusMenu,
+                        onDismissRequest = { showStatusMenu = false },
+                        modifier = Modifier
+                            .width(200.dp)
+                            .background(SurfaceDark, RoundedCornerShape(12.dp))
+                    ) {
+                        Text(
+                            "STATUS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                        listOf(
+                            Triple(EPersonaState.Online, "Online", StatusOnline),
+                            Triple(EPersonaState.Away, "Away", StatusAway),
+                            Triple(EPersonaState.Invisible, "Invisible", StatusOffline)
+                        ).forEach { (state, label, color) ->
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        Box(Modifier.size(10.dp).background(color, CircleShape))
+                                        Text(label, color = TextPrimary)
+                                        Spacer(Modifier.weight(1f))
+                                        if (currentState == state) {
+                                            Icon(Icons.Default.Check, contentDescription = null, tint = Accent, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    showStatusMenu = false
+                                    scope.launch { SteamService.setPersonaState(state) }
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -631,7 +1047,11 @@ class UnifiedActivity : ComponentActivity() {
         if (installedApps.isEmpty()) {
             if (!isLoggedIn) {
                 LoginRequiredScreen("Library") {
-                    startActivity(Intent(this@UnifiedActivity, SteamLoginActivity::class.java))
+                    // Redirect to the Stores section in settings
+                    val intent = Intent(this@UnifiedActivity, MainActivity::class.java)
+                    intent.putExtra("selected_menu_item_id", R.id.main_menu_stores)
+                    intent.putExtra("return_to_unified", true)
+                    startActivity(intent)
                 }
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -642,22 +1062,54 @@ class UnifiedActivity : ComponentActivity() {
         }
 
         val listState = rememberLazyListState(initialFirstVisibleItemIndex = 0)
+        var centerIdx by remember { mutableIntStateOf(0) }
 
-        // When returning to library, the list re-sorts and the newly ran game moves to 0
-        // Snapping the list to 0 ensures the actively moved game is naturally highlighted
-        LaunchedEffect(installedApps) {
-            if (installedApps.isNotEmpty()) {
+        // When entering the library tab for the first time or when it becomes empty -> full, 
+        // ensure we start at the beginning. But don't reset every time the sync status updates
+        // to avoid "cutting out" while the user is browsing.
+        val hasApps = installedApps.isNotEmpty()
+        LaunchedEffect(hasApps) {
+            if (hasApps) {
                 listState.scrollToItem(0)
+                centerIdx = 0
             }
         }
 
-        val centerIdx by remember {
-            derivedStateOf {
+        // Listen for D-Pad / Left Joystick carousel scroll commands
+        val activity = LocalContext.current as? UnifiedActivity
+        LaunchedEffect(listState, installedApps) {
+            activity?.libraryScrollFlow?.collect { direction ->
+                // Use a tighter throttle in the collector as the primary throttle is now in the Activity
+                val targetIdx = (centerIdx + direction).coerceIn(0, (installedApps.size - 1).coerceAtLeast(0))
+                if (targetIdx != centerIdx) {
+                    centerIdx = targetIdx
+                    listState.animateScrollToItem(targetIdx)
+                }
+            }
+        }
+
+        // ── Touch Scroll Support: Update centerIdx as the user scrolls ──
+        LaunchedEffect(listState, installedApps) {
+            snapshotFlow { 
                 val layoutInfo = listState.layoutInfo
-                val viewportCenter = layoutInfo.viewportStartOffset + layoutInfo.viewportSize.width / 2
-                layoutInfo.visibleItemsInfo.minByOrNull {
-                    abs((it.offset + it.size / 2) - viewportCenter)
-                }?.index ?: 0
+                val visibleItems = layoutInfo.visibleItemsInfo
+                if (visibleItems.isEmpty()) -1
+                else {
+                    val viewportWidthPx = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
+                    val center = viewportWidthPx / 2 + layoutInfo.viewportStartOffset
+                    visibleItems.minBy { kotlin.math.abs((it.offset + it.size / 2) - center) }.index
+                }
+            }.collect { newIdx ->
+                if (newIdx != -1 && newIdx != centerIdx) {
+                    centerIdx = newIdx
+                }
+            }
+        }
+
+        // ── Auto-snap to center after touch scrolling stops ──
+        LaunchedEffect(listState.isScrollInProgress) {
+            if (!listState.isScrollInProgress && installedApps.isNotEmpty()) {
+                listState.animateScrollToItem(centerIdx)
             }
         }
 
@@ -675,125 +1127,146 @@ class UnifiedActivity : ComponentActivity() {
         val itemWidth = 140.dp
         val centerPadding = (screenWidthDp - itemWidth) / 2
 
-        Column(
-            modifier = Modifier.fillMaxSize().padding(top = 16.dp),
-            verticalArrangement = Arrangement.Top
-        ) {
-
-            // ── Horizontal carousel ──
-            LazyRow(
-                state = listState,
-                modifier = Modifier.fillMaxWidth().height(260.dp),
-                contentPadding = PaddingValues(horizontal = centerPadding),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.CenterVertically
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.Center
             ) {
-                itemsIndexed(installedApps) { index, app ->
-                    val isCentered = index == centerIdx
-                    val targetScale by animateFloatAsState(
-                        targetValue = if (isCentered) 1.15f else 0.85f,
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioMediumBouncy,
-                            stiffness = Spring.StiffnessMedium
-                        ),
-                        label = "capsuleScale"
-                    )
-                    val shadowElevation by animateFloatAsState(
-                        targetValue = if (isCentered) 24f else 2f,
-                        spring(stiffness = Spring.StiffnessMedium),
-                        label = "shadowElev"
-                    )
-                    val titleAlpha by animateFloatAsState(
-                        targetValue = if (isCentered) 1f else 0.5f,
-                        spring(stiffness = Spring.StiffnessMedium),
-                        label = "titleAlpha"
-                    )
 
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .width(itemWidth)
-                            .graphicsLayer {
-                                scaleX = targetScale
-                                scaleY = targetScale
-                            }
-                    ) {
-                        GameCapsule(
-                            app = app,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .shadow(
-                                    shadowElevation.dp,
-                                    RoundedCornerShape(12.dp),
-                                    spotColor = if (isCentered) Color.Black.copy(alpha = 0.6f) else Color.Transparent
-                                )
-                                .then(if (isCentered) Modifier.border(4.dp, Accent.copy(alpha = 0.8f), RoundedCornerShape(12.dp)) else Modifier)
+                // ── Horizontal carousel ──
+                LazyRow(
+                    state = listState,
+                    modifier = Modifier.fillMaxWidth().height(260.dp),
+                    contentPadding = PaddingValues(horizontal = centerPadding),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    itemsIndexed(installedApps) { index, app ->
+                        val isCentered = index == centerIdx
+                        val targetScale by animateFloatAsState(
+                            targetValue = if (isCentered) 1.15f else 0.85f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                stiffness = Spring.StiffnessMedium
+                            ),
+                            label = "capsuleScale"
                         )
+                        val shadowElevation by animateFloatAsState(
+                            targetValue = if (isCentered) 24f else 2f,
+                            spring(stiffness = Spring.StiffnessMedium),
+                            label = "shadowElev"
+                        )
+                        val titleAlpha by animateFloatAsState(
+                            targetValue = if (isCentered) 1f else 0.5f,
+                            spring(stiffness = Spring.StiffnessMedium),
+                            label = "titleAlpha"
+                        )
+
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .width(itemWidth)
+                                .graphicsLayer {
+                                    scaleX = targetScale
+                                    scaleY = targetScale
+                                }
+                        ) {
+                            GameCapsule(
+                                app = app,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .shadow(
+                                        shadowElevation.dp,
+                                        RoundedCornerShape(12.dp),
+                                        spotColor = if (isCentered) Color.Black.copy(alpha = 0.6f) else Color.Transparent
+                                    )
+                                    .then(if (isCentered) Modifier.border(4.dp, Accent.copy(alpha = 0.8f), RoundedCornerShape(12.dp)) else Modifier)
+                            )
+                        }
                     }
                 }
-            }
 
-            Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(24.dp))
 
-            // ── Selected game details ──
-            if (selectedApp != null) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 32.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(SurfaceDark)
-                        .padding(20.dp)
-                ) {
-                    Text(
-                        selectedApp.name,
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        if (selectedApp.developer.isNotEmpty()) {
-                            Text(selectedApp.developer, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                        }
-                        val isCustom = selectedApp.id < 0
-                        val installed = isCustom || SteamService.isAppInstalled(selectedApp.id)
+                // ── Selected game details ──
+                if (selectedApp != null) {
+                    val isPS = ControllerHelper.isPlayStationController()
+                    val isController = ControllerHelper.isControllerConnected()
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 32.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(SurfaceDark)
+                            .padding(20.dp)
+                    ) {
                         Text(
-                            if (installed) "● Installed" else "○ Not Installed",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (installed) StatusOnline else TextSecondary
+                            selectedApp.name,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
-                        if (isCustom) {
-                            Text("Custom", style = MaterialTheme.typography.bodySmall, color = Accent)
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            if (selectedApp.developer.isNotEmpty()) {
+                                Text(selectedApp.developer, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                            }
+                            val isCustom = selectedApp.id < 0
+                            val installed = isCustom || SteamService.isAppInstalled(selectedApp.id)
+                            Text(
+                                if (installed) "● Installed" else "○ Not Installed",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (installed) StatusOnline else TextSecondary
+                            )
+                            if (isCustom) {
+                                Text("Custom", style = MaterialTheme.typography.bodySmall, color = Accent)
+                            }
                         }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        val context = LocalContext.current
-                        val containerManager = remember { ContainerManager(context) }
-                        val isCustom = selectedApp.id < 0
+                        Spacer(Modifier.height(16.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            val context = LocalContext.current
+                            val containerManager = remember { ContainerManager(context) }
+                            val isCustom = selectedApp.id < 0
 
-                        if (isCustom || SteamService.isAppInstalled(selectedApp.id)) {
-                            Button(
-                                onClick = {
-                                    if (isCustom) {
-                                        launchCustomGame(context, containerManager, selectedApp.name)
-                                    } else {
-                                        launchSteamGame(context, containerManager, selectedApp)
+                            if (isCustom || SteamService.isAppInstalled(selectedApp.id)) {
+                                Button(
+                                    onClick = {
+                                        if (isCustom) {
+                                            launchCustomGame(context, containerManager, selectedApp.name)
+                                        } else {
+                                            launchSteamGame(context, containerManager, selectedApp)
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) { 
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("PLAY", fontWeight = FontWeight.Bold)
+                                        if (isController) {
+                                            Spacer(Modifier.width(8.dp))
+                                            ControllerBadge(if (isPS) "Cross" else "A")
+                                        }
                                     }
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                                shape = RoundedCornerShape(12.dp)
-                            ) { Text("PLAY", fontWeight = FontWeight.Bold) }
-                        }
+                                }
+                            }
 
-                        if (!isCustom) {
-                            OutlinedButton(
-                                onClick = { selectedAppForSettings = selectedApp },
-                                shape = RoundedCornerShape(12.dp)
-                            ) { Text("Game Settings", color = TextSecondary) }
+                            if (!isCustom) {
+                                OutlinedButton(
+                                    onClick = { selectedAppForSettings = selectedApp },
+                                    shape = RoundedCornerShape(12.dp)
+                                ) { 
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("Game Settings", color = TextSecondary)
+                                        if (isController) {
+                                            Spacer(Modifier.width(8.dp))
+                                            ControllerBadge(if (isPS) "Triangle" else "Y")
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -988,7 +1461,6 @@ class UnifiedActivity : ComponentActivity() {
                             Button(
                                 onClick = {
                                     if (isCustom || isEpic) {
-                                        // For custom or epic games, find the shortcut and navigate to its container settings
                                         val cm = ContainerManager(context)
                                         val sc = cm.loadShortcuts().find {
                                             if (isCustom) {
@@ -1003,7 +1475,6 @@ class UnifiedActivity : ComponentActivity() {
                                             intent.putExtra("return_to_unified", true)
                                             context.startActivity(intent)
                                         } else if (isEpic) {
-                                            // No existing shortcut — open in create-new mode for Epic
                                             val intent = Intent(context, MainActivity::class.java)
                                             intent.putExtra("create_shortcut_for_epic_id", epicId)
                                             intent.putExtra("create_shortcut_for_app_name", app.name)
@@ -1024,7 +1495,9 @@ class UnifiedActivity : ComponentActivity() {
                             ) { Text("Settings") }
                             Spacer(Modifier.height(8.dp))
                             Button(
-                                onClick = { currentTab = "Saves" },
+                                onClick = {
+                                    currentTab = "Saves"
+                                },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(8.dp)
                             ) { Text("Saves") }
@@ -1140,6 +1613,7 @@ class UnifiedActivity : ComponentActivity() {
             modifier = modifier
                 .clip(RoundedCornerShape(12.dp))
                 .background(CardDark)
+                .focusable()
                 .pointerInput(app.id) {
                     detectTapGestures {
                         val containerManager = com.winlator.cmod.container.ContainerManager(context)
@@ -1187,18 +1661,8 @@ class UnifiedActivity : ComponentActivity() {
                     contentScale = ContentScale.Crop
                 )
             } else {
-                // Artwork — robust CDN fallback chain
-                val imageUrls = listOf(
-                    app.getCapsuleUrl(),
-                    app.getCapsuleUrl(large = true),
-                    "https://cdn.cloudflare.steamstatic.com/steam/apps/${app.id}/library_600x900.jpg",
-                    app.getHeroUrl(),
-                    app.getHeaderImageUrl(),
-                    "https://cdn.cloudflare.steamstatic.com/steam/apps/${app.id}/header.jpg",
-                    "https://cdn.cloudflare.steamstatic.com/steam/apps/${app.id}/capsule_616x353.jpg",
-                    "https://cdn.cloudflare.steamstatic.com/steam/apps/${app.id}/library_hero.jpg"
-                )
-                val imageUrl = imageUrls.firstOrNull { it != null } ?: imageUrls[2]!!
+                // Artwork — tiered fallback implemented in SteamApp model
+                val imageUrl = app.getCapsuleUrl()
 
                 AsyncImage(
                     model = ImageRequest.Builder(context)
@@ -1236,6 +1700,9 @@ class UnifiedActivity : ComponentActivity() {
 
         val epicApps by db.epicGameDao().getAll().collectAsState(initial = emptyList())
         val selectedAppId = remember { mutableStateOf<Int?>(null) }
+        val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+        val activity = LocalContext.current as? UnifiedActivity
+        val density = LocalContext.current.resources.displayMetrics.density
         
         // Ensure library updates from cloud
         LaunchedEffect(Unit) {
@@ -1244,8 +1711,30 @@ class UnifiedActivity : ComponentActivity() {
             }
         }
 
+        LaunchedEffect(gridState) {
+            activity?.rightStickScrollState?.collect { rz ->
+                if (kotlin.math.abs(rz) > 0.1f) {
+                    val speedFactor = kotlin.math.abs(rz)
+                    val baseSpeed = 1.25f + (speedFactor * (8f - 1.25f))
+                    val direction = if (rz > 0) 1f else -1f
+                    
+                    while(kotlin.math.abs(activity.rightStickScrollState.value) > 0.1f) {
+                        val currentRz = activity.rightStickScrollState.value
+                        val currentSpeedFactor = kotlin.math.abs(currentRz)
+                        val currentBaseSpeed = 1.25f + (currentSpeedFactor * (8f - 1.25f))
+                        val currentDirection = if (currentRz > 0) 1f else -1f
+                        
+                        val pixelsToScroll = currentBaseSpeed * currentDirection * density
+                        gridState.dispatchRawDelta(pixelsToScroll)
+                        kotlinx.coroutines.delay(16)
+                    }
+                }
+            }
+        }
+
         Column(Modifier.fillMaxSize().padding(16.dp)) {
             LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Adaptive(minSize = 150.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1323,10 +1812,21 @@ class UnifiedActivity : ComponentActivity() {
         var dlcApps by remember { mutableStateOf<List<EpicGame>>(emptyList()) }
         val selectedDlcIds = remember { mutableStateListOf<Int>() }
         var customPath by remember { mutableStateOf<String?>(null) }
+        var showCustomPathWarning by remember { mutableStateOf(false) }
 
         val folderPickerLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.OpenDocumentTree()
         ) { uri -> uri?.let { customPath = getPathFromTreeUri(it) } }
+
+        if (showCustomPathWarning) {
+            CustomPathWarningDialog(
+                onDismiss = { showCustomPathWarning = false },
+                onProceed = {
+                    showCustomPathWarning = false
+                    folderPickerLauncher.launch(null)
+                }
+            )
+        }
 
         LaunchedEffect(app.id, installed) {
             if (!installed) {
@@ -1430,16 +1930,30 @@ class UnifiedActivity : ComponentActivity() {
                                 Spacer(Modifier.height(16.dp))
                                 Text("Install Location", color = TextPrimary, fontWeight = FontWeight.Bold)
                                 Row(verticalAlignment = Alignment.CenterVertically) {
+                                    val defaultPathSet = if (PrefManager.useSingleDownloadFolder) PrefManager.defaultDownloadFolder.isNotEmpty() else PrefManager.epicDownloadFolder.isNotEmpty()
                                     Button(
-                                        onClick = { folderPickerLauncher.launch(null) },
+                                        onClick = {
+                                            if (customPath == null && defaultPathSet) {
+                                                showCustomPathWarning = true
+                                            } else {
+                                                folderPickerLauncher.launch(null)
+                                            }
+                                        },
                                         colors = ButtonDefaults.buttonColors(containerColor = Accent),
                                         modifier = Modifier.weight(1f),
                                         shape = RoundedCornerShape(8.dp)
                                     ) {
-                                        val displayPath = if (customPath == null) "Choose Custom Path" else "Path: $customPath"
+                                        val displayPath = if (customPath != null) {
+                                            "Path: $customPath"
+                                        } else if (defaultPathSet) {
+                                            "Already Set"
+                                        } else {
+                                            "Choose Custom Path"
+                                        }
                                         Text(displayPath, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
                                     if (customPath != null) {
+
                                         IconButton(onClick = { customPath = null }) {
                                             Icon(Icons.Default.Clear, contentDescription = "Clear", tint = TextPrimary)
                                         }
@@ -1490,10 +2004,52 @@ class UnifiedActivity : ComponentActivity() {
 
         var selectedAppForDialog by remember { mutableStateOf<SteamApp?>(null) }
         val context = LocalContext.current
+        val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+        val activity = LocalContext.current as? UnifiedActivity
+        val density = LocalContext.current.resources.displayMetrics.density
+
+        // Right joystick: 2x faster at full push with smooth speed curve
+        LaunchedEffect(gridState) {
+            activity?.rightStickScrollState?.collect { rz ->
+                if (kotlin.math.abs(rz) > 0.1f) {
+                    while(kotlin.math.abs(activity.rightStickScrollState.value) > 0.1f) {
+                        val currentRz = activity.rightStickScrollState.value
+                        val currentSpeedFactor = kotlin.math.abs(currentRz)
+                        val currentDirection = if (currentRz > 0) 1f else -1f
+                        // Speed curve: slow start (2.5) to fast full push (16 = 2x the old max of 8)
+                        val currentBaseSpeed = 2.5f + (currentSpeedFactor * currentSpeedFactor * (16f - 2.5f))
+                        
+                        val pixelsToScroll = currentBaseSpeed * currentDirection * density
+                        gridState.dispatchRawDelta(pixelsToScroll)
+                        kotlinx.coroutines.delay(16)
+                    }
+                }
+            }
+        }
+
+        // Left joystick: 75% slower scrolling (vertical only, for browsing store)
+        LaunchedEffect(gridState) {
+            activity?.leftStickScrollState?.collect { ly ->
+                if (kotlin.math.abs(ly) > 0.15f) {
+                    while(kotlin.math.abs(activity.leftStickScrollState.value) > 0.15f) {
+                        val currentLy = activity.leftStickScrollState.value
+                        val currentSpeedFactor = kotlin.math.abs(currentLy)
+                        val currentDirection = if (currentLy > 0) 1f else -1f
+                        // 75% slower than original: base was 1.25..8, now 0.3125..2
+                        val currentBaseSpeed = 0.3125f + (currentSpeedFactor * (2f - 0.3125f))
+                        
+                        val pixelsToScroll = currentBaseSpeed * currentDirection * density
+                        gridState.dispatchRawDelta(pixelsToScroll)
+                        kotlinx.coroutines.delay(16)
+                    }
+                }
+            }
+        }
 
         Column(Modifier.fillMaxSize().padding(16.dp)) {
 
             LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Adaptive(minSize = 150.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1531,9 +2087,7 @@ class UnifiedActivity : ComponentActivity() {
                 .clickable(onClick = onClick)
         ) {
             Box {
-                val imageUrl = app.getHeaderImageUrl()
-                    ?: app.getCapsuleUrl()
-                    ?: "https://cdn.akamai.steamstatic.com/steam/apps/${app.id}/header.jpg"
+                val imageUrl = app.getCapsuleUrl()
 
                 AsyncImage(
                     model = ImageRequest.Builder(context).data(imageUrl).crossfade(300).build(),
@@ -1565,7 +2119,7 @@ class UnifiedActivity : ComponentActivity() {
 
     // ─── Downloads Tab ────────────────────────────────────────────────
     @Composable
-    fun DownloadsTab() {
+    fun DownloadsTab(selectedId: String?, onSelectDownload: (String?) -> Unit) {
         val downloads = remember { mutableStateListOf<Pair<String, DownloadInfo>>() }
 
         LaunchedEffect(Unit) {
@@ -1573,17 +2127,123 @@ class UnifiedActivity : ComponentActivity() {
                 val currentDownloads = DownloadService.getAllDownloads()
                 downloads.clear()
                 downloads.addAll(currentDownloads)
+                if (selectedId != null && currentDownloads.none { it.first == selectedId }) {
+                    onSelectDownload(null)
+                }
                 kotlinx.coroutines.delay(1000)
             }
         }
 
-        Column(Modifier.fillMaxSize().padding(16.dp)) {
-            Text("ACTIVE DOWNLOADS", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
-            Spacer(Modifier.height(16.dp))
+        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            val isController = ControllerHelper.isControllerConnected()
+            val isPS = ControllerHelper.isPlayStationController()
 
-            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // ── Global Actions row ──
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val selectedInfo = downloads.find { it.first == selectedId }?.second
+                val isPaused = selectedInfo?.getStatusFlow()?.value == DownloadPhase.PAUSED
+                
+                val pauseResumeLabel = if (selectedId == null) {
+                    val anyActive = downloads.any { it.second.isActive() }
+                    if (anyActive) "Pause All" else "Resume All"
+                } else {
+                    if (isPaused) "Resume" else "Pause"
+                }
+                
+                val cancelLabel = if (selectedId == null) "Cancel All" else "Cancel"
+
+                Button(
+                    onClick = {
+                        if (selectedId == null) {
+                            val anyActive = downloads.any { it.second.isActive() }
+                            if (anyActive) SteamService.pauseAll() else SteamService.resumeAll()
+                        } else {
+                            if (isPaused) {
+                                val appId = selectedId.removePrefix("STEAM_").removePrefix("EPIC_").toIntOrNull() ?: 0
+                                if (selectedId.startsWith("STEAM_")) SteamService.downloadApp(appId)
+                            } else {
+                                selectedInfo?.cancel("Paused by user")
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(if (isController) 0.35f else 0.25f),
+                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(pauseResumeLabel, color = TextPrimary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (isController) {
+                            Spacer(Modifier.width(8.dp))
+                            ControllerBadge(if (isPS) "L2" else "LT")
+                        }
+                    }
+                }
+
+                Spacer(Modifier.width(12.dp))
+
+                Button(
+                    onClick = {
+                        if (selectedId == null) {
+                            SteamService.cancelAll()
+                        } else {
+                            selectedInfo?.cancel("Cancelled by user")
+                            onSelectDownload(null)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(if (isController) 0.5f else 0.33f),
+                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(cancelLabel, color = TextPrimary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (isController) {
+                            Spacer(Modifier.width(8.dp))
+                            ControllerBadge(if (isPS) "R2" else "RT")
+                        }
+                    }
+                }
+            }
+
+            val listState = rememberLazyListState()
+            val activity = LocalContext.current as? UnifiedActivity
+            val density = LocalContext.current.resources.displayMetrics.density
+            
+            LaunchedEffect(listState) {
+                activity?.rightStickScrollState?.collect { rz ->
+                    if (kotlin.math.abs(rz) > 0.1f) {
+                        // Max scroll speed is 20 rows per second (approx 20 * 100dp / 60fps ~ 32dp per frame)
+                        // Min scroll speed is 0.75 rows per second (approx 0.75 * 100dp / 60fps ~ 1.25dp per frame)
+                        // Use a square curve for more gradual acceleration
+                        val speedFactor = kotlin.math.abs(rz)
+                        val curveFactor = speedFactor * speedFactor
+                        val baseSpeed = 1.25f + (curveFactor * (32f - 1.25f))
+                        val direction = if (rz > 0) 1f else -1f
+                        
+                        // Using a loop while the stick is held
+                        while(kotlin.math.abs(activity.rightStickScrollState.value) > 0.1f) {
+                            val currentRz = activity.rightStickScrollState.value
+                            val currentSpeedFactor = kotlin.math.abs(currentRz)
+                            val currentCurveFactor = currentSpeedFactor * currentSpeedFactor
+                            val currentBaseSpeed = 1.25f + (currentCurveFactor * (32f - 1.25f))
+                            val currentDirection = if (currentRz > 0) 1f else -1f
+                            
+                            val pixelsToScroll = currentBaseSpeed * currentDirection * density
+                            listState.dispatchRawDelta(pixelsToScroll)
+                            kotlinx.coroutines.delay(16) // roughly 60fps
+                        }
+                    }
+                }
+            }
+
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(downloads) { (id, info) ->
-                    DownloadItemDeck(id, info)
+                    DownloadItemDeck(id, info, isSelected = selectedId == id, onClick = {
+                        if (selectedId == id) onSelectDownload(null) else onSelectDownload(id)
+                    })
                 }
                 if (downloads.isEmpty()) {
                     item { EmptyStateMessage("No active downloads.") }
@@ -1593,7 +2253,7 @@ class UnifiedActivity : ComponentActivity() {
     }
 
     @Composable
-    fun DownloadItemDeck(id: String, info: DownloadInfo) {
+    fun DownloadItemDeck(id: String, info: DownloadInfo, isSelected: Boolean, onClick: () -> Unit) {
         var progress by remember { mutableFloatStateOf(info.getProgress()) }
         
         DisposableEffect(info) {
@@ -1613,7 +2273,7 @@ class UnifiedActivity : ComponentActivity() {
         var epicGame by remember(appId) { mutableStateOf<EpicGame?>(null) }
         val context = LocalContext.current
         var isFocused by remember { mutableStateOf(false) }
-        val borderColor = if (isFocused) Accent.copy(alpha = 0.8f) else Color.Transparent
+        val borderColor = if (isFocused || isSelected) Accent.copy(alpha = 0.8f) else Color.Transparent
 
         LaunchedEffect(appId, isSteam, isEpic) {
             withContext(Dispatchers.IO) { 
@@ -1623,19 +2283,19 @@ class UnifiedActivity : ComponentActivity() {
         }
 
         val displayName = if (isSteam) steamApp?.name else if (isEpic) epicGame?.title else "Unknown Game"
-        val displayImage = if (isSteam) steamApp?.getHeaderImageUrl() ?: steamApp?.getCapsuleUrl()
+        val displayImage = if (isSteam) steamApp?.getHeaderImageUrl()
                            else if (isEpic) epicGame?.primaryImageUrl ?: epicGame?.iconUrl
                            else null
 
         Surface(
-            color = CardDark,
+            color = if (isSelected) SurfaceDark else CardDark,
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .border(4.dp, borderColor, RoundedCornerShape(12.dp))
                 .onFocusChanged { isFocused = it.isFocused }
                 .focusable()
-                .clickable { /* Handle click if necessary */ }
+                .clickable(onClick = onClick)
         ) {
             Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 AsyncImage(
@@ -1650,19 +2310,76 @@ class UnifiedActivity : ComponentActivity() {
                 Spacer(Modifier.width(16.dp))
 
                 Column(Modifier.weight(1f)) {
-                    Text(displayName ?: "Unknown Game", fontWeight = FontWeight.Bold, color = TextPrimary)
-                    Text("Status: ${status.name}", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    val currentFile by info.getCurrentFileNameFlow().collectAsState()
+                    val (downloadedBytes, totalBytes) = info.getBytesProgress()
+                    val speed = info.getCurrentDownloadSpeed() ?: 0L
+                    val percentage = (progress * 100).toInt()
 
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(8.dp).clip(CircleShape),
-                        color = Accent,
-                        trackColor = Color.Black.copy(alpha = 0.3f)
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(displayName ?: "Unknown Game", fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        
+                        // Centered Size Info
+                        Text(
+                            text = "${StorageUtils.formatBinarySize(downloadedBytes)} / ${StorageUtils.formatBinarySize(totalBytes)}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TextSecondary,
+                            modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.Center
+                        )
+
+                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                            if (status == DownloadPhase.DOWNLOADING && speed > 0) {
+                                Text(
+                                    text = "${StorageUtils.formatBinarySize(speed)}/s",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Accent,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                    
+                    val statusText = when (status) {
+                        DownloadPhase.DOWNLOADING -> {
+                            val filePart = currentFile?.let { " [${it.take(10)}]" } ?: ""
+                            "Downloading...$filePart"
+                        }
+                        DownloadPhase.PREPARING -> "Preparing..."
+                        DownloadPhase.VERIFYING -> {
+                            val filePart = currentFile?.let { " [${it.take(10)}]" } ?: ""
+                            "Verifying...$filePart"
+                        }
+                        DownloadPhase.PATCHING -> "Patching..."
+                        DownloadPhase.COMPLETE -> "Complete"
+                        DownloadPhase.FAILED -> "Failed: ${if (statusMessage != null && statusMessage != "null") statusMessage else "Unknown error"}"
+                        else -> status.name.lowercase().replaceFirstChar { it.uppercase() }
+                    }
+                    
+                    Text("Status: $statusText", style = MaterialTheme.typography.bodySmall, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.weight(1f).height(8.dp).clip(CircleShape),
+                            color = if (status == DownloadPhase.FAILED) Color(0xFFFF6B6B) else Accent,
+                            trackColor = Color.Black.copy(alpha = 0.3f)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "$percentage%",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TextPrimary,
+                            modifier = Modifier.width(40.dp)
+                        )
+                    }
                 }
 
                 IconButton(onClick = { info.cancel() }) {
                     Icon(Icons.Default.Close, contentDescription = "Cancel", tint = Color(0xFFFF6B6B))
+                }
+                if (ControllerHelper.isControllerConnected()) {
+                    Spacer(Modifier.width(8.dp))
+                    ControllerBadge(if (ControllerHelper.isPlayStationController()) "Cross" else "A")
                 }
             }
         }
@@ -1704,11 +2421,22 @@ class UnifiedActivity : ComponentActivity() {
         var dlcApps by remember { mutableStateOf<List<SteamApp>>(emptyList()) }
         val selectedDlcIds = remember { mutableStateListOf<Int>() }
         var customPath by remember { mutableStateOf<String?>(null) }
+        var showCustomPathWarning by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
 
         val folderPickerLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.OpenDocumentTree()
         ) { uri -> uri?.let { customPath = getPathFromTreeUri(it) } }
+
+        if (showCustomPathWarning) {
+            CustomPathWarningDialog(
+                onDismiss = { showCustomPathWarning = false },
+                onProceed = {
+                    showCustomPathWarning = false
+                    folderPickerLauncher.launch(null)
+                }
+            )
+        }
 
         LaunchedEffect(app.id) {
             withContext(Dispatchers.IO) {
@@ -1771,15 +2499,30 @@ class UnifiedActivity : ComponentActivity() {
                             Spacer(Modifier.height(16.dp))
                             Text("Install Location", color = TextPrimary, fontWeight = FontWeight.Bold)
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                val defaultPathSet = if (PrefManager.useSingleDownloadFolder) PrefManager.defaultDownloadFolder.isNotEmpty() else PrefManager.steamDownloadFolder.isNotEmpty()
                                 Button(
-                                    onClick = { folderPickerLauncher.launch(null) },
+                                    onClick = {
+                                        if (customPath == null && defaultPathSet) {
+                                            showCustomPathWarning = true
+                                        } else {
+                                            folderPickerLauncher.launch(null)
+                                        }
+                                    },
                                     colors = ButtonDefaults.buttonColors(containerColor = Accent),
                                     modifier = Modifier.weight(1f),
                                     shape = RoundedCornerShape(8.dp)
                                 ) {
-                                    Text(if (customPath == null) "Choose Custom Path" else "Path: $customPath", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    val displayPath = if (customPath != null) {
+                                        "Path: $customPath"
+                                    } else if (defaultPathSet) {
+                                        "Already Set"
+                                    } else {
+                                        "Choose Custom Path"
+                                    }
+                                    Text(displayPath, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 if (customPath != null) {
+
                                     IconButton(onClick = { customPath = null }) {
                                         Icon(Icons.Default.Clear, contentDescription = "Clear Custom Path", tint = TextPrimary)
                                     }
@@ -2178,18 +2921,19 @@ class UnifiedActivity : ComponentActivity() {
 
     @Composable
     fun LoginRequiredScreen(storeName: String, onLoginClick: () -> Unit) {
-        val message = if (storeName == "Library") "Please sign in to see your Steam Library" else "Please sign in to $storeName"
-        val buttonText = "Sign in to $storeName"
+        val message = if (storeName == "Library") "Sign into a store or add a custom game to build your library." else "Please sign in to access the $storeName store."
+        val buttonText = if (storeName == "Library") "Manage Store Accounts" else "Sign into $storeName"
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
                 Icon(Icons.Default.Person, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(64.dp))
                 Spacer(Modifier.height(16.dp))
-                Text(message, color = TextPrimary, style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(16.dp))
+                Text(message, color = TextPrimary, style = MaterialTheme.typography.titleMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                Spacer(Modifier.height(24.dp))
                 Button(
                     onClick = onLoginClick,
                     colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(48.dp).fillMaxWidth(0.7f)
                 ) { Text(buttonText, fontWeight = FontWeight.Bold) }
             }
         }
@@ -2616,5 +3360,68 @@ class UnifiedActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    @Composable
+    fun CustomPathWarningDialog(onDismiss: () -> Unit, onProceed: () -> Unit) {
+        Dialog(onDismissRequest = onDismiss) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = CardDark,
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(24.dp)) {
+                    Text(
+                        text = "Custom Download Path",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = "A default download path has already been configured in Settings > Stores. If you wish to set a unique custom path for this specific installation, click Proceed.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+                    Spacer(Modifier.height(24.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        TextButton(onClick = onDismiss) {
+                            Text("Close", color = TextSecondary)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = onProceed,
+                            colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Proceed")
+                        }
+                    }
+
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ControllerBadge(text: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .background(Color(0xFF30363D), RoundedCornerShape(12.dp))
+            .border(1.dp, Color(0xFF8B949E).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = Color(0xFFE6EDF3),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.labelSmall
+        )
     }
 }

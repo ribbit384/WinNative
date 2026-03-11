@@ -94,6 +94,52 @@ object PrefManager {
         get() = getBoolean("aio_store_mode", true)
         set(value) { setBoolean("aio_store_mode", value) }
 
+    var enableSteamLogs: Boolean
+        get() = getBoolean("enable_steam_logs", false)
+        set(value) { setBoolean("enable_steam_logs", value) }
+
+    var useSingleDownloadFolder: Boolean
+        get() = getBoolean("use_single_download_folder", true)
+        set(value) { setBoolean("use_single_download_folder", value) }
+
+    var defaultDownloadFolder: String
+        get() = getString("default_download_folder", "")
+        set(value) { setString("default_download_folder", value) }
+
+    var steamDownloadFolder: String
+        get() = getString("steam_download_folder", "")
+        set(value) { setString("steam_download_folder", value) }
+
+    var epicDownloadFolder: String
+        get() = getString("epic_download_folder", "")
+        set(value) { setString("epic_download_folder", value) }
+
+    var gogDownloadFolder: String
+        get() = getString("gog_download_folder", "")
+        set(value) { setString("gog_download_folder", value) }
+
+    var amazonDownloadFolder: String
+        get() = getString("amazon_download_folder", "")
+        set(value) { setString("amazon_download_folder", value) }
+
+    var downloadQueueSize: Int
+        get() = getInt("download_queue_size", 1)
+        set(value) { setInt("download_queue_size", value) }
+
+    fun clearAuthTokens() {
+        prefs?.edit()?.apply {
+            remove("user_name")
+            remove("refresh_token")
+            remove("access_token")
+            remove("steam_user_steam_id_64")
+            remove("steam_user_account_id")
+            remove("steam_user_name")
+            remove("steam_user_avatar_hash")
+            remove("persona_state")
+            apply()
+        }
+    }
+
     fun clearPreferences() {
         prefs?.edit()?.clear()?.apply()
     }

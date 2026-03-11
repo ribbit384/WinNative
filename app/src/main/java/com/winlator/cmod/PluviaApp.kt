@@ -17,6 +17,10 @@ class PluviaApp : Application() {
         // Init our datastore preferences.
         PrefManager.init(this)
 
+        if (PrefManager.enableSteamLogs) {
+            timber.log.Timber.plant(timber.log.Timber.DebugTree())
+        }
+
         DownloadService.populateDownloadService(this)
 
         // Initialize process-wide reactive network state

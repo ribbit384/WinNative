@@ -129,6 +129,16 @@ object EpicConstants {
      * Default Epic games installation path - uses external storage if available
      */
     fun defaultEpicGamesPath(context: android.content.Context): String {
+        val storeDefaultUri = if (PrefManager.useSingleDownloadFolder) PrefManager.defaultDownloadFolder else PrefManager.epicDownloadFolder
+        if (storeDefaultUri.isNotEmpty()) {
+            val baseDir = com.winlator.cmod.core.FileUtils.getFilePathFromUri(context, Uri.parse(storeDefaultUri))
+            if (baseDir != null) {
+                Timber.i("Epic using user-defined default storage: $baseDir")
+                File(baseDir).mkdirs()
+                return baseDir
+            }
+        }
+
         return if (PrefManager.useExternalStorage && File(PrefManager.externalStoragePath).exists()) {
             val path = externalEpicGamesPath()
             Timber.i("Epic using external storage: $path")

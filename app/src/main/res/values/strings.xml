@@ -1518,6 +1518,8 @@ E.g. <b>META</b> for <i>META key</i>, \n
     <string name="settings_debug_box_logs_subtitle">Write Box86 &amp; Box64 debug output to file</string>
     <string name="settings_debug_fex_logs_title">Enable FEXCore Logs</string>
     <string name="settings_debug_fex_logs_subtitle">Write FEXCore debug output to file</string>
+    <string name="settings_debug_steam_logs_title">Enable Steam Logs</string>
+    <string name="settings_debug_steam_logs_subtitle">Log Steam authentication and session events for debugging.</string>
     <string name="advanced_logging_subtitle">Low-level logging controls for Wine and emulation backends.</string>
     <string name="advanced_debugging_logs_title">Logging &amp; Diagnostics</string>
     <string name="advanced_debugging_logs_summary">Enable only the logs you need when tracking down rendering, translation, or startup issues.</string>
@@ -1884,7 +1886,7 @@ E.g. <b>META</b> for <i>META key</i>, \n
     <string name="gog_settings_logout_title">Logout</string>
     <string name="gog_settings_logout_subtitle">Sign out from your GOG account</string>
     <string name="gog_logout_confirm_title">Logout from GOG?</string>
-    <string name="gog_logout_confirm_message">This will remove your GOG credentials and clear your GOG library from this device. You can sign in again at any time.</string>
+    <string name="gog_logout_confirm_message">This will remove your GOG credentials from this device. Your library, installed games, and shortcuts will remain exactly as they are.</string>
     <string name="gog_logout_confirm">Logout</string>
     <string name="gog_logout_success">Logged out from GOG successfully</string>
     <string name="gog_logout_failed">Failed to logout: %s</string>
@@ -1899,7 +1901,7 @@ E.g. <b>META</b> for <i>META key</i>, \n
     <string name="epic_settings_logout_title">Logout</string>
     <string name="epic_settings_logout_subtitle">Sign out from your Epic Games account</string>
     <string name="epic_logout_confirm_title">Logout from Epic Games?</string>
-    <string name="epic_logout_confirm_message">This will remove your Epic Games credentials and clear your Epic Games library from this device. You can sign in again at any time.</string>
+    <string name="epic_logout_confirm_message">This will remove your Epic Games credentials from this device. Your library, installed games, and shortcuts will remain exactly as they are.</string>
     <string name="epic_logout_confirm">Logout</string>
     <string name="epic_logout_success">Logged out from Epic Games successfully</string>
     <string name="epic_logout_failed">Failed to logout: %s</string>
@@ -1912,7 +1914,7 @@ E.g. <b>META</b> for <i>META key</i>, \n
     <string name="steam_settings_logout_title">Logout</string>
     <string name="steam_settings_logout_subtitle">Sign out from your Steam account</string>
     <string name="steam_logout_confirm_title">Logout from Steam?</string>
-    <string name="steam_logout_confirm_message">This will remove your Steam credentials and clear your Steam library from this device. You can sign in again at any time.</string>
+    <string name="steam_logout_confirm_message">This will remove your Steam credentials from this device. Your library, installed games, and shortcuts will remain exactly as they are.</string>
     <string name="steam_logout_confirm">Logout</string>
     <string name="steam_logout_success">Logged out from Steam successfully</string>
     <string name="steam_logout_failed">Failed to logout: %s</string>

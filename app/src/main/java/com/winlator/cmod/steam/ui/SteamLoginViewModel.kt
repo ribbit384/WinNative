@@ -36,7 +36,7 @@ class SteamLoginViewModel : ViewModel() {
                 currentState.copy(
                     loginResult = LoginResult.DeviceConfirm,
                     loginScreen = LoginScreen.TWO_FACTOR,
-                    isLoggingIn = false,
+                    isLoggingIn = true,
                     lastTwoFactorMethod = "steam_guard",
                 )
             }
@@ -217,6 +217,12 @@ class SteamLoginViewModel : ViewModel() {
             viewModelScope.launch { SteamService.startLoginWithQr() }
         } else {
             SteamService.stopLoginWithQr()
+        }
+    }
+
+    fun onStartQrLogin() {
+        if (_loginState.value.qrCode == null && !_loginState.value.isQrFailed) {
+            viewModelScope.launch { SteamService.startLoginWithQr() }
         }
     }
 

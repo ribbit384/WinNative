@@ -26,6 +26,7 @@ class DebugFragment : Fragment() {
     private lateinit var cbEnableWineDebug: CompoundButton
     private lateinit var cbEnableBox64Logs: CompoundButton
     private lateinit var cbEnableFexcoreLogs: CompoundButton
+    private lateinit var cbEnableSteamLogs: CompoundButton
     private lateinit var wineDebugChannels: ArrayList<String>
 
     override fun onCreateView(
@@ -66,6 +67,17 @@ class DebugFragment : Fragment() {
         cbEnableFexcoreLogs.isChecked = preferences.getBoolean("enable_fexcore_logs", false)
         cbEnableFexcoreLogs.setOnCheckedChangeListener { _, isChecked ->
             preferences.edit { putBoolean("enable_fexcore_logs", isChecked) }
+        }
+
+        cbEnableSteamLogs = view.findViewById(R.id.CBEnableSteamLogs)
+        cbEnableSteamLogs.isChecked = com.winlator.cmod.steam.utils.PrefManager.enableSteamLogs
+        cbEnableSteamLogs.setOnCheckedChangeListener { _, isChecked ->
+            com.winlator.cmod.steam.utils.PrefManager.enableSteamLogs = isChecked
+            
+            // Re-plant Timber if enabled during runtime (optional but helpful)
+            if (isChecked && timber.log.Timber.forest().isEmpty()) {
+                timber.log.Timber.plant(timber.log.Timber.DebugTree())
+            }
         }
 
         return view
