@@ -2119,18 +2119,31 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         String args = "";
 
         if (shortcut != null) {
-            String path = shortcut.path;
+            String execPath = shortcut.path;
             String gameSource = shortcut.getExtra("game_source", "CUSTOM");
-            Log.d("XServerDisplayActivity", "getWineStartCommand: gameSource=" + gameSource + " shortcut.path=" + path);
+            Log.d("XServerDisplayActivity", "getWineStartCommand: gameSource=" + gameSource + " shortcut.path=" + execPath);
 
             // Normalize DOS paths like A:EOSBootstrapper.exe to A:\EOSBootstrapper.exe
-            if (path != null && path.matches("^[A-Z]:[^\\\\/].*")) {
-                path = path.substring(0, 2) + "\\" + path.substring(2);
+            if (execPath != null && execPath.matches("^[A-Z]:[^\\\\/].*")) {
+                execPath = execPath.substring(0, 2) + "\\" + execPath.substring(2);
             }
 
             if (gameSource.equals("STEAM")) {
                 int appId = Integer.parseInt(shortcut.getExtra("app_id"));
-                if (!container.isUseLegacyDRM()) {
+                String targetedExe = shortcut.getExtra("targeted_exe");
+
+                if (targetedExe != null && !targetedExe.isEmpty()) {
+                    execPath = targetedExe;
+                    int lastBackslash = targetedExe.lastIndexOf("\\");
+                    if (lastBackslash >= 0) {
+                        String dir = targetedExe.substring(0, lastBackslash);
+                        if (dir.endsWith(":")) dir += "\\";
+                        File nativeDir = com.winlator.cmod.core.WineUtils.getNativePath(imageFs, dir);
+                        if (nativeDir != null && nativeDir.exists()) {
+                            launcherComponent.setWorkingDir(nativeDir);
+                        }
+                    }
+                } else if (!container.isUseLegacyDRM()) {
                     args = "/dir \"C:\\Program Files (x86)\\Steam\" \"steamclient_loader_x64.exe\"";
                     File nativeDir = com.winlator.cmod.core.WineUtils.getNativePath(imageFs, "C:\\Program Files (x86)\\Steam");
                     if (nativeDir != null && nativeDir.exists()) launcherComponent.setWorkingDir(nativeDir);
@@ -2166,17 +2179,17 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                 extraArgs = (extraArgs != null && !extraArgs.isEmpty()) ? " " + extraArgs : "";
                 
                 // Epic Games are always on A: drive. 
-                String filename = path;
+                String filename = execPath;
                 String dir = "A:\\";
                 
-                if (path != null && path.contains("\\")) {
-                    int lastBackslash = path.lastIndexOf("\\");
-                    filename = path.substring(lastBackslash + 1);
-                    dir = path.substring(0, lastBackslash);
+                if (execPath != null && execPath.contains("\\")) {
+                    int lastBackslash = execPath.lastIndexOf("\\");
+                    filename = execPath.substring(lastBackslash + 1);
+                    dir = execPath.substring(0, lastBackslash);
                     if (dir.endsWith(":")) dir += "\\";
-                } else if (path != null && path.contains(":")) {
-                    filename = path.substring(path.indexOf(":") + 1);
-                    dir = path.substring(0, path.indexOf(":") + 1) + "\\";
+                } else if (execPath != null && execPath.contains(":")) {
+                    filename = execPath.substring(execPath.indexOf(":") + 1);
+                    dir = execPath.substring(0, execPath.indexOf(":") + 1) + "\\";
                 }
 
                 File nativeDir = com.winlator.cmod.core.WineUtils.getNativePath(imageFs, dir);
@@ -2198,14 +2211,14 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                 String extraArgs = shortcut.getExtra("execArgs");
                 extraArgs = (extraArgs != null && !extraArgs.isEmpty()) ? " " + extraArgs : "";
 
-                if (path != null && (path.startsWith("explorer") || path.contains(" /desktop"))) {
-                    return path + extraArgs;
-                } else if (path != null) {
-                    int lastBackslash = path.lastIndexOf("\\");
+                if (execPath != null && (execPath.startsWith("explorer") || execPath.contains(" /desktop"))) {
+                    return execPath + extraArgs;
+                } else if (execPath != null) {
+                    int lastBackslash = execPath.lastIndexOf("\\");
                     if (lastBackslash >= 0) {
-                        String dir = path.substring(0, lastBackslash);
+                        String dir = execPath.substring(0, lastBackslash);
                         if (dir.endsWith(":")) dir += "\\";
-                        String file = path.substring(lastBackslash + 1);
+                        String file = execPath.substring(lastBackslash + 1);
 
                         File nativeDir = com.winlator.cmod.core.WineUtils.getNativePath(imageFs, dir);
                         if (nativeDir != null && nativeDir.exists()) {
@@ -2214,12 +2227,12 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                         }
 
                         if (wineInfo != null && wineInfo.isArm64EC()) {
-                            args = "\"" + path + "\"" + extraArgs;
+                            args = "\"" + execPath + "\"" + extraArgs;
                         } else {
                             args = "/dir \"" + dir + "\" \"" + file + "\"" + extraArgs;
                         }
                     } else {
-                        args = "\"" + path + "\"" + extraArgs;
+                        args = "\"" + execPath + "\"" + extraArgs;
                     }
                 } else {
                     args = "\"wfm.exe\"";
