@@ -51,13 +51,26 @@ public class CPUListView extends LinearLayout {
 
     public void setCheckedCPUList(String checkedCPUList) {
         this.checkedCPUList = Arrays.asList(checkedCPUList.split(","));
-        refreshContent();
+        updateCheckStates();
     }
 
     public void setCheckedCPUList(int from, int to) {
         checkedCPUList.clear();
         for (int i = from; i < to; i++) checkedCPUList.add(String.valueOf(i));
-        refreshContent();
+        updateCheckStates();
+    }
+
+    private void updateCheckStates() {
+        if (getChildCount() != numProcessors) {
+            refreshContent();
+            return;
+        }
+        for (int i = 0; i < numProcessors; i++) {
+            CheckBox checkBox = findViewWithTag("CPU" + i);
+            if (checkBox != null) {
+                checkBox.setChecked(checkedCPUList == null || checkedCPUList.contains(String.valueOf(i)));
+            }
+        }
     }
 
     public String getCheckedCPUListAsString() {

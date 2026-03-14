@@ -156,6 +156,8 @@ private val StatusAway = Color(0xFFF0C040)
 private val StatusOffline = Color(0xFF6E7681)
 
 
+private val LIBRARY_NAME_SANITIZE_REGEX = "[^A-Za-z0-9 _-]".toRegex()
+
 @AndroidEntryPoint
 class UnifiedActivity : ComponentActivity() {
     @Inject lateinit var db: PluviaDatabase
@@ -248,17 +250,17 @@ class UnifiedActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Ensure all store services are running when returning from a game or other activity
         if (GOGService.hasStoredCredentials(this) && !GOGService.isRunning) {
             GOGService.start(this)
         }
-        libraryRefreshSignal++
-    }
-
-    override fun onStop() {
-        super.onStop()
-        if (GOGService.isRunning && !isChangingConfigurations && !GOGService.hasActiveOperations()) {
-            GOGService.stop()
+        if (EpicService.hasStoredCredentials(this) && !EpicService.isRunning) {
+            EpicService.start(this)
         }
+        if (SteamService.isLoggedIn && SteamService.instance == null) {
+            SteamService.start(this)
+        }
+        libraryRefreshSignal++
     }
 
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean {
@@ -437,13 +439,9 @@ class UnifiedActivity : ComponentActivity() {
             ?: remember { mutableStateOf(null) }
         val scope = rememberCoroutineScope()
         
-        // Use libraryRefreshKey as a key for remember so we re-collect from DB when it changes
-        val epicApps by remember(libraryRefreshKey) { 
-            db.epicGameDao().getAll() 
-        }.collectAsState(initial = emptyList())
-        val gogApps by remember(libraryRefreshKey) {
-            db.gogGameDao().getAll()
-        }.collectAsState(initial = emptyList())
+        // Collect Epic/GOG apps from DB flows (Room flows auto-update on data changes)
+        val epicApps by db.epicGameDao().getAll().collectAsState(initial = emptyList())
+        val gogApps by db.gogGameDao().getAll().collectAsState(initial = emptyList())
 
         var isControllerConnected by remember { mutableStateOf(ControllerHelper.isControllerConnected()) }
         val isPS = remember(isControllerConnected) { ControllerHelper.isPlayStationController() }
@@ -532,11 +530,11 @@ class UnifiedActivity : ComponentActivity() {
             }
         }
 
+        // Sync Steam states periodically without forcing full library recomposition
         LaunchedEffect(Unit) {
             while(true) {
                 kotlinx.coroutines.delay(10000)
                 SteamService.syncStates()
-                libraryRefreshKey++
             }
         }
 
@@ -1312,13 +1310,15 @@ class UnifiedActivity : ComponentActivity() {
     ) {
         val context = LocalContext.current
 
-        // Load custom game shortcuts from containers
+        // Load all shortcuts once and cache for both custom app discovery and GameCapsule icon lookup
+        var cachedShortcuts by remember { mutableStateOf<List<Shortcut>>(emptyList()) }
         var customApps by remember { mutableStateOf<List<SteamApp>>(emptyList()) }
         LaunchedEffect(libraryRefreshKey) {
             withContext(Dispatchers.IO) {
                 try {
                     val cm = ContainerManager(context)
-                    val apps = cm.loadShortcuts()
+                    val allShortcuts = cm.loadShortcuts()
+                    val apps = allShortcuts
                         .filter { it.getExtra("game_source") == "CUSTOM" }
                         .map { shortcut ->
                             val displayName = shortcut.getExtra("custom_name", shortcut.name)
@@ -1330,56 +1330,60 @@ class UnifiedActivity : ComponentActivity() {
                                 gameDir = shortcut.getExtra("custom_game_folder", "")
                             )
                         }
-                    withContext(Dispatchers.Main) { customApps = apps }
+                    withContext(Dispatchers.Main) {
+                        cachedShortcuts = allShortcuts
+                        customApps = apps
+                    }
                 } catch (_: Exception) {}
             }
         }
 
-        val steamInstalled = remember(steamApps, libraryRefreshKey) {
-            steamApps.filter { SteamService.isAppInstalled(it.id) }
-        }
+        // Move expensive filtering (runBlocking DB queries, file I/O) off the main thread
+        var installedApps by remember { mutableStateOf<List<SteamApp>>(emptyList()) }
+        var gogByPseudoId by remember { mutableStateOf<Map<Int, GOGGame>>(emptyMap()) }
 
-        val epicInstalled = remember(epicApps, libraryRefreshKey) {
-            epicApps.filter { it.isInstalled }
-        }
+        LaunchedEffect(steamApps, epicApps, gogApps, customApps, libraryRefreshKey) {
+            withContext(Dispatchers.IO) {
+                val steamInstalled = steamApps.filter { SteamService.isAppInstalled(it.id) }
 
-        val gogInstalled = remember(gogApps, libraryRefreshKey) {
-            gogApps.filter { it.isInstalled && java.io.File(it.installPath).exists() }
-        }
+                val epicInstalled = epicApps.filter { it.isInstalled }
 
-        val gogByPseudoId = remember(gogInstalled) {
-            gogInstalled.associateBy { gogPseudoId(it.id) }
-        }
+                val gogInstalled = gogApps.filter { it.isInstalled && java.io.File(it.installPath).exists() }
 
-        val installedApps = remember(steamInstalled, customApps, epicInstalled, gogInstalled, libraryRefreshKey) {
-            val playtimePrefs = context.getSharedPreferences("playtime_stats", android.content.Context.MODE_PRIVATE)
-            // Map Epic games to pseudo SteamApp objects with large ID offset
-            val mappedEpic = epicInstalled.map { epic ->
-                SteamApp(
-                    id = 2000000000 + epic.id,
-                    name = epic.title,
-                    developer = epic.developer,
-                    gameDir = epic.installPath
-                )
-            }
-            val mappedGog = gogInstalled.map { gog ->
-                SteamApp(
-                    id = gogPseudoId(gog.id),
-                    name = gog.title,
-                    developer = gog.developer,
-                    gameDir = gog.installPath,
-                )
-            }
-            val merged = steamInstalled + customApps + mappedEpic + mappedGog
-            merged.sortedByDescending { app ->
-                val searchKey = if (app.id >= 2000000000) {
-                    app.name
-                } else if (app.id < 0) {
-                    app.name
-                } else {
-                    app.name.replace("[^A-Za-z0-9 _-]".toRegex(), "")
+                val gogMap = gogInstalled.associateBy { gogPseudoId(it.id) }
+
+                val playtimePrefs = context.getSharedPreferences("playtime_stats", android.content.Context.MODE_PRIVATE)
+                val allPlaytime = playtimePrefs.all
+                val mappedEpic = epicInstalled.map { epic ->
+                    SteamApp(
+                        id = 2000000000 + epic.id,
+                        name = epic.title,
+                        developer = epic.developer,
+                        gameDir = epic.installPath
+                    )
                 }
-                playtimePrefs.getLong("${searchKey}_last_played", 0L)
+                val mappedGog = gogInstalled.map { gog ->
+                    SteamApp(
+                        id = gogPseudoId(gog.id),
+                        name = gog.title,
+                        developer = gog.developer,
+                        gameDir = gog.installPath,
+                    )
+                }
+                val merged = steamInstalled + customApps + mappedEpic + mappedGog
+                val sorted = merged.sortedByDescending { app ->
+                    val searchKey = if (app.id >= 2000000000 || app.id < 0) {
+                        app.name
+                    } else {
+                        app.name.replace(LIBRARY_NAME_SANITIZE_REGEX, "")
+                    }
+                    (allPlaytime["${searchKey}_last_played"] as? Long) ?: 0L
+                }
+
+                withContext(Dispatchers.Main) {
+                    gogByPseudoId = gogMap
+                    installedApps = sorted
+                }
             }
         }
 
@@ -1479,6 +1483,7 @@ class UnifiedActivity : ComponentActivity() {
                 gogGame = gogByPseudoId[app.id],
                 iconRefreshKey = iconRefreshKey,
                 isFocusedOverride = index == focusIndex,
+                shortcuts = cachedShortcuts,
                 onLongClick = {
                     openSettingsForApp(index, app)
                 },
@@ -1991,6 +1996,7 @@ class UnifiedActivity : ComponentActivity() {
         gogGame: GOGGame? = null,
         iconRefreshKey: Int = 0,
         isFocusedOverride: Boolean = false,
+        shortcuts: List<Shortcut> = emptyList(),
         onLongClick: (() -> Unit)? = null,
         modifier: Modifier = Modifier
     ) {
@@ -2001,25 +2007,18 @@ class UnifiedActivity : ComponentActivity() {
         val epicGame by produceState<EpicGame?>(initialValue = null, key1 = epicId) {
             value = if (isEpic) db.epicGameDao().getById(epicId) else null
         }
-        val customLibraryIconPath by produceState<String?>(
-            initialValue = null,
-            key1 = app.id,
-            key2 = gogGame?.id,
-            key3 = iconRefreshKey
-        ) {
-            value = withContext(Dispatchers.IO) {
-                val containerManager = ContainerManager(context)
-                val shortcut = if (gogGame != null) {
-                    containerManager.loadShortcuts().find {
-                        it.getExtra("game_source") == "GOG" && it.getExtra("gog_id") == gogGame.id
-                    }
-                } else {
-                    findLibraryShortcutForGame(containerManager, app, isCustom, isEpic, epicId)
+        // Use pre-cached shortcuts list instead of loading from disk per-item
+        val customLibraryIconPath = remember(app.id, gogGame?.id, iconRefreshKey, shortcuts) {
+            val shortcut = if (gogGame != null) {
+                shortcuts.find {
+                    it.getExtra("game_source") == "GOG" && it.getExtra("gog_id") == gogGame.id
                 }
-                val customPath = shortcut?.getExtra("customLibraryIconPath")
-                    ?.ifBlank { shortcut.getExtra("customCoverArtPath") }
-                customPath?.takeIf { it.isNotBlank() && java.io.File(it).exists() }
+            } else {
+                findShortcutForGame(shortcuts, app, isCustom, isEpic, epicId)
             }
+            val customPath = shortcut?.getExtra("customLibraryIconPath")
+                ?.ifBlank { shortcut.getExtra("customCoverArtPath") }
+            customPath?.takeIf { it.isNotBlank() && java.io.File(it).exists() }
         }
         val isFocused = isFocusedOverride
 
@@ -3333,14 +3332,24 @@ class UnifiedActivity : ComponentActivity() {
         isEpic: Boolean,
         epicId: Int
     ): Shortcut? {
+        return findShortcutForGame(containerManager.loadShortcuts(), app, isCustom, isEpic, epicId)
+    }
+
+    private fun findShortcutForGame(
+        shortcuts: List<Shortcut>,
+        app: SteamApp,
+        isCustom: Boolean,
+        isEpic: Boolean,
+        epicId: Int
+    ): Shortcut? {
         return when {
-            isCustom -> containerManager.loadShortcuts().find {
+            isCustom -> shortcuts.find {
                 it.getExtra("game_source") == "CUSTOM" && (it.getExtra("custom_name") == app.name || it.name == app.name)
             }
-            isEpic -> containerManager.loadShortcuts().find {
+            isEpic -> shortcuts.find {
                 it.getExtra("game_source") == "EPIC" && it.getExtra("app_id") == epicId.toString()
             }
-            else -> containerManager.loadShortcuts().find {
+            else -> shortcuts.find {
                 it.getExtra("app_id") == app.id.toString()
             }
         }

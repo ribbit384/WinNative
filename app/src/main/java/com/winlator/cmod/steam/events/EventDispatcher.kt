@@ -69,11 +69,13 @@ class EventDispatcher {
         listeners.getOrPut(eventClass) { mutableListOf() }.add(typedListener)
     }
 
+    @Suppress("UNCHECKED_CAST")
     inline fun <reified E : Event<T>, reified T> emit(event: E, noinline resultAggregator: ((Array<T>) -> T)? = null): T? {
         val eventClass = E::class
         return listeners[eventClass]?.let { eventListeners ->
             val results = eventListeners.toList().map { eventListener ->
-                eventListener.second.listener(event) as T
+                val result = eventListener.second.listener(event)
+                if (result == null && Unit is T) Unit as T else result as T
             }.toTypedArray()
             eventListeners.removeIf { it.second.once }
             resultAggregator?.let { it(results) }

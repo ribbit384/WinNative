@@ -2380,8 +2380,8 @@ class SteamService : Service(), IChallengeUrlChanged {
                                     androidEmulation = true,
                                     maxDownloads = maxDownloads,
                                     maxDecompress = maxDecompress,
+                                    maxFileWrites = 1,
                                     parentJob = coroutineContext[Job],
-                                    autoStartDownload = false,
                                 )
 
                                 // Create listeners for DLC apps
@@ -2455,10 +2455,6 @@ class SteamService : Service(), IChallengeUrlChanged {
 
                                 // Signal that no more items will be added
                                 depotDownloader!!.finishAdding()
-
-                                // Start Download
-                                di.updateStatusMessage("Starting download...")
-                                depotDownloader!!.startDownloading()
 
                                 Timber.i("Downloading game to $appDirPath (attempt $attempt)")
 
@@ -2575,7 +2571,7 @@ class SteamService : Service(), IChallengeUrlChanged {
                             else -> e.localizedMessage ?: e.message ?: e.javaClass.simpleName
                         }
 
-                        di.updateStatus(DownloadPhase.FAILED, "Failed: $errorMsg")
+                        di.updateStatus(DownloadPhase.FAILED, errorMsg)
                         di.setActive(false)
                         // Clean up markers and DB state
                         MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
@@ -2899,6 +2895,19 @@ class SteamService : Service(), IChallengeUrlChanged {
                 Timber.i("Item ${item.appId} download completed")
                 Unit
             }
+
+            override fun onFileCompleted(depotId: Int, fileName: String, depotPercentComplete: Float) {
+                Timber.d("File completed: $fileName (Depot $depotId: ${depotPercentComplete * 100}%)")
+                
+                depotIdToIndex[depotId]?.let { index ->
+                    downloadInfo.setProgress(depotPercentComplete, index)
+                }
+
+                // If onChunkCompleted missed some updates or out-of-order, this ensures progress is emitted.
+                downloadInfo.emitProgressChange()
+                Unit
+            }
+
             override fun onDownloadFailed(item: DownloadItem, error: Throwable) {
                 if (error is CancellationException && error !is DownloadFailedException) {
                     if (downloadInfo.isDeleting) {

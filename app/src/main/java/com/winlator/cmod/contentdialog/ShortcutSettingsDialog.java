@@ -123,18 +123,13 @@ public class ShortcutSettingsDialog extends ContentDialog {
 
         final Spinner sBox64Version = findViewById(R.id.SBox64Version);
         
-        ContentsManager contentsManager = new ContentsManager(context);
-        
-        contentsManager.syncContents();
+        final ContentsManager contentsManager = new ContentsManager(context);
 
         final View vGraphicsDriverConfig = findViewById(R.id.BTGraphicsDriverConfig);
         vGraphicsDriverConfig.setTag(shortcut.getExtra("graphicsDriverConfig", shortcut.container.getGraphicsDriverConfig()));
-        
+
         final View vDXWrapperConfig = findViewById(R.id.BTDXWrapperConfig);
         vDXWrapperConfig.setTag(shortcut.getExtra("dxwrapperConfig", shortcut.container.getDXWrapperConfig()));
-
-        loadGraphicsDriverSpinner(sGraphicsDriver, sDXWrapper, vGraphicsDriverConfig, shortcut.getExtra("graphicsDriver", shortcut.container.getGraphicsDriver()),
-            shortcut.getExtra("dxwrapper", shortcut.container.getDXWrapper()));
 
         findViewById(R.id.BTHelpDXWrapper).setOnClickListener((v) -> AppUtils.showHelpBox(context, v, R.string.dxwrapper_help_content));
 
@@ -150,6 +145,14 @@ public class ShortcutSettingsDialog extends ContentDialog {
 
         final Spinner sFEXCoreVersion = findViewById(R.id.SFEXCoreVersion);
         final Spinner sFEXCorePreset = findViewById(R.id.SFEXCorePreset);
+
+        // Sync contents off the main thread, then populate dependent spinners on UI thread
+        java.util.concurrent.Executors.newSingleThreadExecutor().execute(() -> {
+            contentsManager.syncContents();
+            sGraphicsDriver.post(() -> populateContentsSpinners(context, contentsManager,
+                sGraphicsDriver, sDXWrapper, vGraphicsDriverConfig, vDXWrapperConfig,
+                sBox64Version, sEmulator, sEmulator64, sFEXCoreVersion));
+        });
 
         AdapterView.OnItemSelectedListener emulatorListener = new AdapterView.OnItemSelectedListener() {
             @Override
@@ -190,57 +193,7 @@ public class ShortcutSettingsDialog extends ContentDialog {
             popupMenu.show();
         });
 
-        FrameLayout fexcoreFL = findViewById(R.id.fexcoreFrame);
-        String wineVersionStr = shortcut.getExtra("wineVersion", shortcut.container.getWineVersion());
-        WineInfo wineInfo = WineInfo.fromIdentifier(context, contentsManager, wineVersionStr);
-        if (wineInfo.isArm64EC()) {
-            fexcoreFL.setVisibility(View.VISIBLE);
-            // Arm64EC containers MUST use FEXCore for both 32-bit and 64-bit emulation
-            sEmulator.setSelection(0); // FEXCore
-            sEmulator64.setSelection(0); // FEXCore
-            sEmulator.setEnabled(false);
-            sEmulator64.setEnabled(false);
-            Log.d("ShortcutSettingsDialog", "Arm64EC container: forcing FEXCore for both emulators");
-        }
-        else {
-            fexcoreFL.setVisibility(View.GONE);
-            // x86_64 containers MUST use Box64 for both 32-bit and 64-bit emulation
-            sEmulator.setSelection(1); // Box64
-            sEmulator64.setSelection(1); // Box64
-            sEmulator.setEnabled(false);
-            sEmulator64.setEnabled(false);
-            Log.d("ShortcutSettingsDialog", "x86_64 container: forcing Box64 for both emulators");
-        }
-
-        ContainerDetailFragment.setupDXWrapperSpinner(sDXWrapper, vDXWrapperConfig, wineInfo.isArm64EC());
-        loadBox64VersionSpinner(context, contentsManager, sBox64Version, wineInfo.isArm64EC());
-
-        // Add this part to set the initial spinner selection based on the shortcut
-        String currentBox64Version = shortcut.getExtra("box64Version", shortcut.container.getBox64Version());
-        if (currentBox64Version != null) {
-            AppUtils.setSpinnerSelectionFromValue(sBox64Version, currentBox64Version);
-        } else {
-            // Default selection or use a preferred default version
-            AppUtils.setSpinnerSelectionFromValue(sBox64Version, wineInfo.isArm64EC() ? DefaultVersion.WOWBOX64 : DefaultVersion.BOX64);
-        }
-
-        // Set OnItemSelectedListener for the Box64 version spinner
-        sBox64Version.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                String selectedVersion = parent.getItemAtPosition(position).toString();
-                box64Version = selectedVersion;  // Update the class-level variable
-                // Update the shortcut extra immediately, or wait until saveData() is called
-                shortcut.putExtra("box64Version", selectedVersion);
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-                // This method must be implemented, even if it's empty.
-                // Optional: You can handle the case where no item is selected, if needed.
-            }
-        });
-
+        // Non-contentsManager-dependent UI setup (runs immediately)
         final CheckBox cbFullscreenStretched =  findViewById(R.id.CBFullscreenStretched);
         boolean fullscreenStretched = shortcut.getExtra("fullscreenStretched", "0").equals("1");
         cbFullscreenStretched.setChecked(fullscreenStretched);
@@ -253,7 +206,6 @@ public class ShortcutSettingsDialog extends ContentDialog {
         final View btHelpDInput = findViewById(R.id.BTDInputHelp);
         Spinner SDInputType = findViewById(R.id.SDInputType);
         int inputType = Integer.parseInt(shortcut.getExtra("inputType", String.valueOf(shortcut.container.getInputType())));
-
 
         cbEnableXInput.setChecked((inputType & WinHandler.FLAG_INPUT_TYPE_XINPUT) == WinHandler.FLAG_INPUT_TYPE_XINPUT);
         cbEnableDInput.setChecked((inputType & WinHandler.FLAG_INPUT_TYPE_DINPUT) == WinHandler.FLAG_INPUT_TYPE_DINPUT);
@@ -273,8 +225,6 @@ public class ShortcutSettingsDialog extends ContentDialog {
 
         final Spinner sBox64Preset = findViewById(R.id.SBox64Preset);
         Box64PresetManager.loadSpinner("box64", sBox64Preset, shortcut.getExtra("box64Preset", shortcut.container.getBox64Preset()));
-
-        FEXCoreManager.loadFEXCoreVersion(context, contentsManager, sFEXCoreVersion, shortcut.getExtra("fexcoreVersion", shortcut.container.getFEXCoreVersion()));
 
         FEXCorePresetManager.loadSpinner(sFEXCorePreset, shortcut.getExtra("fexcorePreset", shortcut.container.getFEXCorePreset()));
 
@@ -714,6 +664,11 @@ public class ShortcutSettingsDialog extends ContentDialog {
         
         final String[] dxwrapperEntries = context.getResources().getStringArray(R.array.dxwrapper_entries);
         
+        // Build DXWrapper adapter once, not on every graphics driver change
+        ArrayList<String> dxItems = new ArrayList<>(Arrays.asList(dxwrapperEntries));
+        sDXWrapper.setAdapter(new ArrayAdapter<>(context, android.R.layout.simple_spinner_dropdown_item, dxItems));
+        AppUtils.setSpinnerSelectionFromIdentifier(sDXWrapper, selectedDXWrapper);
+
         Runnable update = () -> {
             String graphicsDriver = sGraphicsDriver.getSelectedItem() != null ? StringUtils.parseIdentifier(sGraphicsDriver.getSelectedItem()) : "";
             String graphicsDriverConfig = vGraphicsDriverConfig.getTag() != null ? vGraphicsDriverConfig.getTag().toString() : "";
@@ -723,13 +678,6 @@ public class ShortcutSettingsDialog extends ContentDialog {
             vGraphicsDriverConfig.setOnClickListener((v) -> {
                 GraphicsDriverConfigDialog.showSafe(vGraphicsDriverConfig, graphicsDriver, tvGraphicsDriverVersion);
             });
-
-            ArrayList<String> items = new ArrayList<>();
-            for (String value : dxwrapperEntries) {
-                    items.add(value);
-            }
-            sDXWrapper.setAdapter(new ArrayAdapter<>(context, android.R.layout.simple_spinner_dropdown_item, items.toArray(new String[0])));
-            AppUtils.setSpinnerSelectionFromIdentifier(sDXWrapper, selectedDXWrapper);
         };
 
         sGraphicsDriver.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
@@ -744,5 +692,54 @@ public class ShortcutSettingsDialog extends ContentDialog {
 
         AppUtils.setSpinnerSelectionFromIdentifier(sGraphicsDriver, selectedGraphicsDriver);
         update.run();
+    }
+
+    private void populateContentsSpinners(Context context, ContentsManager contentsManager,
+            Spinner sGraphicsDriver, Spinner sDXWrapper, View vGraphicsDriverConfig, View vDXWrapperConfig,
+            Spinner sBox64Version, Spinner sEmulator, Spinner sEmulator64, Spinner sFEXCoreVersion) {
+        loadGraphicsDriverSpinner(sGraphicsDriver, sDXWrapper, vGraphicsDriverConfig,
+            shortcut.getExtra("graphicsDriver", shortcut.container.getGraphicsDriver()),
+            shortcut.getExtra("dxwrapper", shortcut.container.getDXWrapper()));
+
+        FrameLayout fexcoreFL = findViewById(R.id.fexcoreFrame);
+        String wineVersionStr = shortcut.getExtra("wineVersion", shortcut.container.getWineVersion());
+        WineInfo wineInfo = WineInfo.fromIdentifier(context, contentsManager, wineVersionStr);
+        if (wineInfo.isArm64EC()) {
+            fexcoreFL.setVisibility(View.VISIBLE);
+            sEmulator.setSelection(0);
+            sEmulator64.setSelection(0);
+            sEmulator.setEnabled(false);
+            sEmulator64.setEnabled(false);
+        } else {
+            fexcoreFL.setVisibility(View.GONE);
+            sEmulator.setSelection(1);
+            sEmulator64.setSelection(1);
+            sEmulator.setEnabled(false);
+            sEmulator64.setEnabled(false);
+        }
+
+        ContainerDetailFragment.setupDXWrapperSpinner(sDXWrapper, vDXWrapperConfig, wineInfo.isArm64EC());
+        loadBox64VersionSpinner(context, contentsManager, sBox64Version, wineInfo.isArm64EC());
+
+        String currentBox64Version = shortcut.getExtra("box64Version", shortcut.container.getBox64Version());
+        if (currentBox64Version != null) {
+            AppUtils.setSpinnerSelectionFromValue(sBox64Version, currentBox64Version);
+        } else {
+            AppUtils.setSpinnerSelectionFromValue(sBox64Version, wineInfo.isArm64EC() ? DefaultVersion.WOWBOX64 : DefaultVersion.BOX64);
+        }
+
+        sBox64Version.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                String selectedVersion = parent.getItemAtPosition(position).toString();
+                box64Version = selectedVersion;
+                shortcut.putExtra("box64Version", selectedVersion);
+            }
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
+
+        FEXCoreManager.loadFEXCoreVersion(context, contentsManager, sFEXCoreVersion,
+            shortcut.getExtra("fexcoreVersion", shortcut.container.getFEXCoreVersion()));
     }
 }

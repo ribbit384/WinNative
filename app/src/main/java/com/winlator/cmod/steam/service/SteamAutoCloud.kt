@@ -14,6 +14,7 @@ import com.winlator.cmod.steam.service.SteamService.Companion.FileChanges
 import com.winlator.cmod.steam.service.SteamService.Companion.getAppDirPath
 import com.winlator.cmod.steam.utils.FileUtils
 import com.winlator.cmod.steam.utils.SteamUtils
+import `in`.dragonbra.javasteam.enums.EPlatformType
 import `in`.dragonbra.javasteam.enums.EResult
 import `in`.dragonbra.javasteam.steam.handlers.steamcloud.AppFileChangeList
 import `in`.dragonbra.javasteam.steam.handlers.steamcloud.AppFileInfo
@@ -794,6 +795,30 @@ object SteamAutoCloud {
             }
         }.inWholeMicroseconds
 
+        val microsecBuildSyncList = (microsecTotal - (microsecInitCaches + microsecValidateState + microsecAcLaunch + microsecAcExit)).coerceAtLeast(0L)
+
+        steamCloud.appCloudSyncStats(
+            appId = appInfo.id,
+            platformType = EPlatformType.Android64,
+            blockingAppLaunch = microsecAcLaunch > 0,
+            filesUploaded = filesUploaded,
+            filesDownloaded = filesDownloaded,
+            filesDeleted = filesDeleted,
+            bytesUploaded = bytesUploaded,
+            bytesDownloaded = bytesDownloaded,
+            microsecTotal = microsecTotal,
+            microsecInitCaches = microsecInitCaches,
+            microsecValidateState = microsecValidateState,
+            microsecAcLaunch = microsecAcLaunch,
+            microsecAcPrepUserFiles = microsecAcPrepUserFiles,
+            microsecAcExit = microsecAcExit,
+            microsecBuildSyncList = microsecBuildSyncList,
+            microsecDeleteFiles = microsecDeleteFiles,
+            microsecDownloadFiles = microsecDownloadFiles,
+            microsecUploadFiles = microsecUploadFiles,
+            filesManaged = filesManaged,
+        )
+
         postSyncInfo = PostSyncInfo(
             syncResult = syncResult,
             remoteTimestamp = remoteTimestamp,
@@ -812,6 +837,7 @@ object SteamAutoCloud {
             microsecAcLaunch = microsecAcLaunch,
             microsecAcPrepUserFiles = microsecAcPrepUserFiles,
             microsecAcExit = microsecAcExit,
+            microsecBuildSyncList = microsecBuildSyncList,
             microsecDeleteFiles = microsecDeleteFiles,
             microsecDownloadFiles = microsecDownloadFiles,
             microsecUploadFiles = microsecUploadFiles,

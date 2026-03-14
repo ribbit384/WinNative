@@ -3,6 +3,8 @@ package com.winlator.cmod
 import android.app.Application
 import android.util.Log
 import com.winlator.cmod.steam.events.EventDispatcher
+import org.bouncycastle.jce.provider.BouncyCastleProvider
+import java.security.Security
 import dagger.hilt.android.HiltAndroidApp
 
 import com.winlator.cmod.gog.service.GOGAuthManager
@@ -20,7 +22,12 @@ class PluviaApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        
+
+        // Replace Android's limited BouncyCastle provider with the full one
+        // so that JavaSteam can use SHA-1 (and other algorithms) via the "BC" provider.
+        Security.removeProvider("BC")
+        Security.addProvider(BouncyCastleProvider())
+
         // Init our datastore preferences.
         PrefManager.init(this)
         GOGConstants.init(this)

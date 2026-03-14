@@ -187,6 +187,6 @@ dependencies {
     annotationProcessor 'com.github.bumptech.glide:compiler:4.16.0'
 
     // JavaSteam
-    implementation 'io.github.joshuatam:javasteam:1.8.0-11-SNAPSHOT'
-    implementation 'io.github.joshuatam:javasteam-depotdownloader:1.8.0-11-SNAPSHOT'
+    implementation 'in.dragonbra:javasteam:1.8.1-SNAPSHOT'
+    implementation 'in.dragonbra:javasteam-depotdownloader:1.8.1-SNAPSHOT'
 }

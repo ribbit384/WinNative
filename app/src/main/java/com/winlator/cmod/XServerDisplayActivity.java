@@ -27,6 +27,7 @@ import android.view.MotionEvent;
 import android.view.PointerIcon;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.FrameLayout;
@@ -1897,6 +1898,18 @@ public class XServerDisplayActivity extends AppCompatActivity {
         final CheckBox cbEnableHaptics = dialog.findViewById(R.id.CBEnableHaptics);
         cbEnableHaptics.setChecked(preferences.getBoolean("touchscreen_haptics_enabled", false));
 
+        // Auto-enable Show Touchscreen Controls when a profile is selected
+        sProfile.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (position > 0) {
+                    cbShowTouchscreenControls.setChecked(true);
+                }
+            }
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
+
         final Runnable updateProfile = () -> {
             int position = sProfile.getSelectedItemPosition();
             if (position > 0) {
@@ -1924,6 +1937,7 @@ public class XServerDisplayActivity extends AppCompatActivity {
             boolean isTimeoutEnabled = cbEnableTimeout.isChecked();
             boolean isHapticsEnabled = cbEnableHaptics.isChecked();
             SharedPreferences.Editor editor = preferences.edit();
+            editor.putBoolean("show_touchscreen_controls_enabled", cbShowTouchscreenControls.isChecked());
             editor.putBoolean("touchscreen_timeout_enabled", isTimeoutEnabled);
             editor.putBoolean("touchscreen_haptics_enabled", isHapticsEnabled);
             editor.apply();
