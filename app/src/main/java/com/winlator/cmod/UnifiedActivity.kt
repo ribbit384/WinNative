@@ -11,20 +11,36 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import com.winlator.cmod.widget.chasingBorder
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -48,9 +65,17 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import android.content.res.Configuration
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -103,6 +128,7 @@ import com.winlator.cmod.utils.ControllerHelper
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.ui.text.style.TextAlign
 import androidx.core.view.WindowCompat
 import kotlin.math.roundToInt
@@ -111,6 +137,7 @@ import kotlin.math.roundToInt
 private val BgDark = Color(0xFF0F0F12)
 private val SurfaceDark = Color(0xFF161B22)
 private val CardDark = Color(0xFF14141E)
+private val CardBorder = Color(0xFF21212E)
 private val Accent = Color(0xFF1A9FFF)
 private val AccentGlow = Color(0xFF58A6FF)
 private val TextPrimary = Color(0xFFF0F4FF)
@@ -118,6 +145,7 @@ private val TextSecondary = Color(0xFF7A8FA8)
 private val StatusOnline = Color(0xFF3FB950)
 private val StatusAway = Color(0xFFF0C040)
 private val StatusOffline = Color(0xFF6E7681)
+
 
 @AndroidEntryPoint
 class UnifiedActivity : ComponentActivity() {
@@ -135,9 +163,23 @@ class UnifiedActivity : ComponentActivity() {
     val rightStickScrollState = kotlinx.coroutines.flow.MutableStateFlow(0f)
     val leftStickScrollState = kotlinx.coroutines.flow.MutableStateFlow(0f)
     val keyEventFlow = kotlinx.coroutines.flow.MutableSharedFlow<android.view.KeyEvent>(extraBufferCapacity = 10)
-    // Flow for library carousel: -1 = scroll left, +1 = scroll right
-    val libraryScrollFlow = kotlinx.coroutines.flow.MutableSharedFlow<Int>(extraBufferCapacity = 1, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
+    // Library grid focus: tracked index and item count, controlled by DPAD
+    val libraryFocusIndex = kotlinx.coroutines.flow.MutableStateFlow(0)
+    var libraryItemCount: Int = 0
     private var lastLibraryMoveTime = 0L
+    private val libraryColumns = 4
+
+    private fun moveLibraryFocus(left: Boolean, right: Boolean, up: Boolean, down: Boolean) {
+        val idx = libraryFocusIndex.value
+        val count = libraryItemCount
+        if (count <= 0) return
+        var newIdx = idx
+        if (left) newIdx = (idx - 1).coerceAtLeast(0)
+        if (right) newIdx = (idx + 1).coerceAtMost(count - 1)
+        if (up) newIdx = (idx - libraryColumns).coerceAtLeast(0)
+        if (down) newIdx = (idx + libraryColumns).coerceAtMost(count - 1)
+        libraryFocusIndex.value = newIdx
+    }
 
     private fun gogPseudoId(gameId: String): Int {
         val normalized = gameId.hashCode() and 0x1FFFFFFF
@@ -163,24 +205,26 @@ class UnifiedActivity : ComponentActivity() {
             else -> false
         }
 
-        if (action == android.view.KeyEvent.ACTION_DOWN) {
-            val now = System.currentTimeMillis()
-            // Intercept D-pad left/right for library carousel scrolling IF we are on the library tab
-            // Throttle at the source to prevent double-triggers from crosstalk with hat axes
-            if (currentTabKey == "library" && (now - lastLibraryMoveTime > 200) && event.repeatCount == 0) {
-                when (keyCode) {
-                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        lastLibraryMoveTime = now
-                        libraryScrollFlow.tryEmit(-1)
-                        return true
-                    }
-                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        lastLibraryMoveTime = now
-                        libraryScrollFlow.tryEmit(1)
-                        return true
-                    }
+        // On library tab, intercept ALL DPAD events so focus can never leave the grid
+        if (currentTabKey == "library") {
+            val isDpad = keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT ||
+                    keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT ||
+                    keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP ||
+                    keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN
+            if (isDpad) {
+                if (action == android.view.KeyEvent.ACTION_DOWN) {
+                    moveLibraryFocus(
+                        left = keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                        right = keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                        up = keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP,
+                        down = keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN
+                    )
                 }
+                return true // consume both DOWN and UP
             }
+        }
+
+        if (action == android.view.KeyEvent.ACTION_DOWN) {
             if (isHandledGlobally) {
                 keyEventFlow.tryEmit(event)
                 return true
@@ -189,7 +233,7 @@ class UnifiedActivity : ComponentActivity() {
             // Consume ACTION_UP for handled keys to ensure balanced event stream for super
             return true
         }
-        
+
         return super.dispatchKeyEvent(event)
     }
 
@@ -242,26 +286,23 @@ class UnifiedActivity : ComponentActivity() {
             val isLibraryTab = currentTabKey == "library"
             val isStoreTab = currentTabKey == "store" || currentTabKey == "steam" || currentTabKey == "epic"
 
-            // LIBRARY TAB: D-pad left/right scrolls carousel
+            // LIBRARY TAB: update grid focus index directly (no injectKeyEvent to avoid bypassing interception)
             if (isLibraryTab) {
-                // D-pad hat left/right scroll the carousel, throttled relative to shared move time
-                if (isHatLeft || isHatRight) {
-                    if (now - lastLibraryMoveTime > 200) {
-                        if (isHatLeft) libraryScrollFlow.tryEmit(-1)
-                        if (isHatRight) libraryScrollFlow.tryEmit(1)
-                        lastLibraryMoveTime = now
-                        lastHatMoveTime = now
-                        return true
+                val count = libraryItemCount
+                if (count > 0) {
+                    if (isHatLeft || isHatRight || isHatUp || isHatDown) {
+                        if (now - lastHatMoveTime > 150) {
+                            moveLibraryFocus(isHatLeft, isHatRight, isHatUp, isHatDown)
+                            lastHatMoveTime = now
+                            return true
+                        }
                     }
-                }
-                // Left joystick left/right also scrolls carousel
-                if (isJoystickLeft || isJoystickRight) {
-                    if (now - lastLibraryMoveTime > 300) {
-                        if (isJoystickLeft) libraryScrollFlow.tryEmit(-1)
-                        if (isJoystickRight) libraryScrollFlow.tryEmit(1)
-                        lastLibraryMoveTime = now
-                        lastJoystickMoveTime = now
-                        return true
+                    if (isJoystickLeft || isJoystickRight || isJoystickUp || isJoystickDown) {
+                        if (now - lastJoystickMoveTime > 300) {
+                            moveLibraryFocus(isJoystickLeft, isJoystickRight, isJoystickUp, isJoystickDown)
+                            lastJoystickMoveTime = now
+                            return true
+                        }
                     }
                 }
             } else {
@@ -363,6 +404,7 @@ class UnifiedActivity : ComponentActivity() {
         val storeVisible = remember { mutableStateMapOf("steam" to true, "epic" to true, "gog" to true, "amazon" to true) }
         var showAddCustomGame by remember { mutableStateOf(false) }
         var showExitDialog by remember { mutableStateOf(false) }
+        var searchQuery by remember { mutableStateOf("") }
         var libraryRefreshKey by remember { mutableIntStateOf(0) }
         
         val currentRefreshSignal = this@UnifiedActivity.libraryRefreshSignal
@@ -594,7 +636,7 @@ class UnifiedActivity : ComponentActivity() {
         Box(Modifier.fillMaxSize().background(BgDark)) {
             Scaffold(
                 containerColor = BgDark,
-                topBar = { TopBar(tabs, selectedIdx, { selectedIdx = it }, persona, context, scope, isControllerConnected, isPS, isLibraryTab) {
+                topBar = { TopBar(tabs, selectedIdx, { selectedIdx = it }, persona, context, scope, isControllerConnected, isPS, isLibraryTab, searchQuery, { searchQuery = it }) {
                     if (selectedLibrarySource == "GOG") {
                         globalSettingsGogGame = gogApps.find { it.id == selectedGogGameId }
                     } else {
@@ -627,21 +669,29 @@ class UnifiedActivity : ComponentActivity() {
                 Box(Modifier.padding(padding).fillMaxSize().background(BgDark)) {
                     val key = tabs.getOrNull(selectedIdx)?.key ?: "library"
 
-                    when (key) {
-                        "library" -> LibraryCarousel(isLoggedIn, filteredSteamApps, epicApps, gogApps, libraryRefreshKey)
-                        "downloads" -> DownloadsTab(selectedDownloadId, onSelectDownload = { selectedDownloadId = it })
-                        "steam", "store" -> SteamStoreTab(isLoggedIn, filteredSteamApps)
+                    AnimatedContent(
+                        targetState = key,
+                        transitionSpec = {
+                            fadeIn(tween(200)) togetherWith fadeOut(tween(150))
+                        },
+                        label = "tabContent"
+                    ) { animatedKey ->
+                        when (animatedKey) {
+                            "library" -> LibraryCarousel(isLoggedIn, filteredSteamApps, epicApps, gogApps, libraryRefreshKey, searchQuery)
+                            "downloads" -> DownloadsTab(selectedDownloadId, onSelectDownload = { selectedDownloadId = it })
+                            "steam", "store" -> SteamStoreTab(isLoggedIn, filteredSteamApps, searchQuery)
 
-                        "epic" -> EpicStoreTab(isEpicLoggedIn) {
-                            epicLoginLauncher.launch(Intent(this@UnifiedActivity, EpicOAuthActivity::class.java))
+                            "epic" -> EpicStoreTab(isEpicLoggedIn, searchQuery) {
+                                epicLoginLauncher.launch(Intent(this@UnifiedActivity, EpicOAuthActivity::class.java))
+                            }
+                            "gog" -> GOGStoreTab(isGogLoggedIn, searchQuery) {
+                                gogLoginLauncher.launch(Intent(this@UnifiedActivity, GOGOAuthActivity::class.java))
+                            }
+                            "amazon" -> StorePlaceholderTab("Amazon Games")
                         }
-                        "gog" -> GOGStoreTab(isGogLoggedIn) {
-                            gogLoginLauncher.launch(Intent(this@UnifiedActivity, GOGOAuthActivity::class.java))
-                        }
-                        "amazon" -> StorePlaceholderTab("Amazon Games")
                     }
 
-                    // ── Bottom-left filter button ──
+                    // Bottom-left filter button
                     if (key != "downloads") {
                         Row(
                             modifier = Modifier
@@ -668,7 +718,7 @@ class UnifiedActivity : ComponentActivity() {
                         }
                     }
 
-                    // ── Bottom-right Add Custom Game button ──
+                    // Bottom-right Add Custom Game button
                     if (key == "library") {
                         Box(
                             modifier = Modifier
@@ -686,7 +736,7 @@ class UnifiedActivity : ComponentActivity() {
                         }
                     }
 
-                    // ── Cloud Sync Dialog ──
+                    // Cloud Sync Dialog
                     val cloudSyncStatus by SteamService.cloudSyncStatus.collectAsState()
                     if (cloudSyncStatus != null) {
                         CloudSyncOverlay(cloudSyncStatus!!)
@@ -818,154 +868,124 @@ class UnifiedActivity : ComponentActivity() {
         isControllerConnected: Boolean,
         isPS: Boolean,
         isLibraryTab: Boolean,
+        searchQuery: String,
+        onSearchQueryChange: (String) -> Unit,
         onGameSettingsClicked: () -> Unit
     ) {
         var showStatusMenu by remember { mutableStateOf(false) }
         val currentState = persona?.state ?: EPersonaState.Online
-        val tabListState = rememberLazyListState()
-        val tabWidthsPx = remember(tabs) { mutableStateMapOf<Int, Int>() }
-        var tabViewportWidthPx by remember { mutableIntStateOf(0) }
+        var isSearchExpanded by remember { mutableStateOf(false) }
+        val searchFocusRequester = remember { FocusRequester() }
+        val keyboardController = LocalSoftwareKeyboardController.current
+        val isDownloadsTab = tabs.getOrNull(selectedIdx)?.key == "downloads"
 
-        LaunchedEffect(selectedIdx, tabs, tabViewportWidthPx, tabWidthsPx[selectedIdx]) {
-            val selectedTabWidth = tabWidthsPx[selectedIdx] ?: return@LaunchedEffect
-            if (tabViewportWidthPx <= 0 || tabs.isEmpty()) return@LaunchedEffect
-
-            val centeredOffset = -((tabViewportWidthPx - selectedTabWidth) / 2f).roundToInt()
-            tabListState.animateScrollToItem(selectedIdx.coerceIn(0, tabs.lastIndex), centeredOffset)
+        // Auto-collapse search when switching tabs
+        LaunchedEffect(selectedIdx) {
+            if (isSearchExpanded) {
+                onSearchQueryChange("")
+                isSearchExpanded = false
+            }
         }
 
-        Row(
+        // Auto-focus the search field when expanded
+        LaunchedEffect(isSearchExpanded) {
+            if (isSearchExpanded) {
+                kotlinx.coroutines.delay(150)
+                searchFocusRequester.requestFocus()
+            } else if (searchQuery.isNotEmpty()) {
+                onSearchQueryChange("")
+            }
+        }
+
+
+        Column(modifier = Modifier.fillMaxWidth()) {
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
                 .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal))
                 .height(64.dp)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 8.dp)
         ) {
-            // Left Block: Settings & Download Queue
+            // Center Block: Tabs (absolutely centered, unaffected by left/right content)
             Row(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Settings Button
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .shadow(6.dp, CircleShape, spotColor = Color.Black.copy(alpha = 0.5f))
-                            .clip(CircleShape)
-                            .background(SurfaceDark)
-                            .focusProperties { canFocus = !isLibraryTab },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        IconButton(onClick = {
-                            val intent = Intent(context, MainActivity::class.java)
-                            intent.putExtra("selected_menu_item_id", R.id.main_menu_stores)
-                            intent.putExtra("return_to_unified", true)
-                            val opts = ActivityOptionsCompat.makeCustomAnimation(context, R.anim.settings_enter, R.anim.settings_exit)
-                            context.startActivity(intent, opts.toBundle())
-                        }, modifier = Modifier.size(44.dp), enabled = true) {
-                            Icon(Icons.Default.Settings, contentDescription = "Menu", tint = TextPrimary, modifier = Modifier.size(24.dp))
-                        }
-                    }
-                    if (isControllerConnected) {
-                        Spacer(Modifier.width(8.dp))
-                        ControllerBadge(if (isPS) "Options" else "Start")
-                    }
-                }
-
-                // Download Queue (Centered between Settings and Tabs)
-                if (tabs.getOrNull(selectedIdx)?.key == "downloads") {
-                    var queueSize by remember { mutableIntStateOf(PrefManager.downloadQueueSize) }
-                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(
-                                    onClick = { if (queueSize > 1) { queueSize--; PrefManager.downloadQueueSize = queueSize } },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "Decrease Queue", tint = TextPrimary, modifier = Modifier.size(18.dp))
-                                }
-                                
-                                Text(
-                                    text = queueSize.toString(),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = TextPrimary,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 4.dp)
-                                )
-                                
-                                IconButton(
-                                    onClick = { queueSize++; PrefManager.downloadQueueSize = queueSize },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Increase Queue", tint = TextPrimary, modifier = Modifier.size(18.dp))
-                                }
-                            }
-                            Text(
-                                text = "Download Queue",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextSecondary,
-                                fontSize = 8.sp
-                            )
-                        }
-                    }
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
-            }
-
-            // Center Block: Tabs
-            Row(
+                modifier = Modifier.align(Alignment.Center),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (isControllerConnected) {
                     ControllerBadge("L1")
                     Spacer(Modifier.width(8.dp))
                 }
-                Row(
-                    modifier = Modifier
-                        .widthIn(max = 340.dp)
-                        .height(44.dp)
-                        .shadow(8.dp, RoundedCornerShape(24.dp), spotColor = Color.Black.copy(alpha = 0.4f))
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(SurfaceDark.copy(alpha = 0.85f))
-                        .onGloballyPositioned { tabViewportWidthPx = it.size.width }
-                        .focusProperties { canFocus = !isLibraryTab },
+                @Suppress("DEPRECATION")
+                CompositionLocalProvider(
+                    androidx.compose.material3.LocalRippleConfiguration provides null
                 ) {
-                    LazyRow(
-                        state = tabListState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    val tabWidth = 100.dp
+                    val visibleCount = minOf(3, tabs.size)
+                    val tabListState = rememberLazyListState()
+                    val snapFlingBehavior = rememberSnapFlingBehavior(lazyListState = tabListState)
+
+                    LaunchedEffect(selectedIdx) {
+                        val scrollTo = maxOf(0, selectedIdx - 1)
+                        tabListState.animateScrollToItem(scrollTo)
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .width(tabWidth * visibleCount)
+                            .height(44.dp)
+                            .shadow(8.dp, RoundedCornerShape(24.dp), spotColor = Color.Black.copy(alpha = 0.5f))
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(CardDark)
+                            .border(1.dp, CardBorder, RoundedCornerShape(24.dp))
                     ) {
-                        itemsIndexed(tabs) { index, tab ->
-                            val selected = selectedIdx == index
-                            val scale by animateFloatAsState(
-                                if (selected) 1.05f else 1f,
-                                spring(stiffness = Spring.StiffnessMedium),
-                                label = "tabScale"
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .onGloballyPositioned { tabWidthsPx[index] = it.size.width }
-                                    .graphicsLayer { scaleX = scale; scaleY = scale }
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(if (selected) Accent.copy(alpha = 0.15f) else Color.Transparent)
-                                    .clickable { onSelect(index) }
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = tab.label.uppercase(),
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (selected) Accent else TextSecondary,
-                                    fontSize = 13.sp,
-                                    maxLines = 1
+                        LazyRow(
+                            state = tabListState,
+                            flingBehavior = snapFlingBehavior,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .focusProperties { canFocus = !isLibraryTab },
+                            userScrollEnabled = tabs.size > visibleCount
+                        ) {
+                            itemsIndexed(tabs) { index, tab ->
+                                val selected = selectedIdx == index
+                                val interactionSource = remember { MutableInteractionSource() }
+                                val isPressed by interactionSource.collectIsPressedAsState()
+                                val tabScale by animateFloatAsState(
+                                    targetValue = if (isPressed) 0.92f else 1f,
+                                    animationSpec = spring(stiffness = Spring.StiffnessHigh),
+                                    label = "tabScale"
                                 )
+                                val textColor by animateColorAsState(
+                                    targetValue = if (selected) Accent else TextSecondary,
+                                    animationSpec = tween(280),
+                                    label = "tabTextColor"
+                                )
+
+                                Box(
+                                    modifier = Modifier
+                                        .width(tabWidth)
+                                        .fillMaxHeight()
+                                        .focusProperties { canFocus = false }
+                                        .graphicsLayer {
+                                            scaleX = tabScale
+                                            scaleY = tabScale
+                                        }
+                                        .clickable(
+                                            interactionSource = interactionSource,
+                                            indication = null
+                                        ) { onSelect(index) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = tab.label.uppercase(),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                        fontSize = 13.sp,
+                                        maxLines = 1,
+                                        color = textColor
+                                    )
+                                }
                             }
                         }
                     }
@@ -976,9 +996,92 @@ class UnifiedActivity : ComponentActivity() {
                 }
             }
 
+            // Left Block: Settings & Search
+            Row(
+                modifier = Modifier.align(Alignment.CenterStart).fillMaxHeight(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Settings Button
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .shadow(6.dp, CircleShape, spotColor = Color.Black.copy(alpha = 0.5f))
+                        .clip(CircleShape)
+                        .background(SurfaceDark)
+                        .focusProperties { canFocus = !isLibraryTab },
+                    contentAlignment = Alignment.Center
+                ) {
+                    IconButton(onClick = {
+                        val intent = Intent(context, MainActivity::class.java)
+                        intent.putExtra("selected_menu_item_id", R.id.main_menu_stores)
+                        intent.putExtra("return_to_unified", true)
+                        val opts = ActivityOptionsCompat.makeCustomAnimation(context, R.anim.settings_enter, R.anim.settings_exit)
+                        context.startActivity(intent, opts.toBundle())
+                    }, modifier = Modifier.size(44.dp), enabled = true) {
+                        Icon(Icons.Default.Settings, contentDescription = "Menu", tint = TextPrimary, modifier = Modifier.size(24.dp))
+                    }
+                }
+                if (isControllerConnected) {
+                    Spacer(Modifier.width(8.dp))
+                    ControllerBadge(if (isPS) "Options" else "Start")
+                }
+
+                // Search Button (disabled on downloads tab)
+                Spacer(Modifier.width(12.dp))
+
+                val searchIconRotation by animateFloatAsState(
+                    targetValue = if (isSearchExpanded) 90f else 0f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessLow
+                    ),
+                    label = "searchIconRotation"
+                )
+
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .shadow(6.dp, CircleShape, spotColor = Color.Black.copy(alpha = 0.5f))
+                        .clip(CircleShape)
+                        .background(
+                            if (isDownloadsTab) SurfaceDark.copy(alpha = 0.4f)
+                            else if (isSearchExpanded) Accent.copy(alpha = 0.15f)
+                            else SurfaceDark
+                        )
+                        .focusProperties { canFocus = !isLibraryTab },
+                    contentAlignment = Alignment.Center
+                ) {
+                    IconButton(
+                        onClick = {
+                            if (!isDownloadsTab) {
+                                if (isSearchExpanded) {
+                                    onSearchQueryChange("")
+                                    isSearchExpanded = false
+                                } else {
+                                    isSearchExpanded = true
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(44.dp),
+                        enabled = !isDownloadsTab
+                    ) {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = "Search",
+                            tint = if (isDownloadsTab) TextSecondary.copy(alpha = 0.4f)
+                                   else if (isSearchExpanded) Accent
+                                   else TextPrimary,
+                            modifier = Modifier
+                                .size(24.dp)
+                                .graphicsLayer { rotationZ = searchIconRotation }
+                        )
+                    }
+                }
+            }
+
             // Right Block: Status & Actions
             Row(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1088,6 +1191,101 @@ class UnifiedActivity : ComponentActivity() {
                 }
             }
         }
+
+        // Dropdown Search Bar
+        AnimatedVisibility(
+            visible = isSearchExpanded && !isDownloadsTab,
+            enter = expandVertically(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioLowBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                ),
+                expandFrom = Alignment.Top
+            ) + fadeIn(animationSpec = tween(200)),
+            exit = shrinkVertically(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMedium
+                ),
+                shrinkTowards = Alignment.Top
+            ) + fadeOut(animationSpec = tween(150))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .widthIn(max = 600.dp)
+                        .fillMaxWidth(0.7f)
+                        .height(44.dp)
+                        .shadow(8.dp, RoundedCornerShape(24.dp), spotColor = Color.Black.copy(alpha = 0.4f))
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(SurfaceDark),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = null,
+                            tint = Accent,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        BasicTextField(
+                            value = searchQuery,
+                            onValueChange = onSearchQueryChange,
+                            singleLine = true,
+                            textStyle = TextStyle(
+                                color = TextPrimary,
+                                fontSize = 15.sp
+                            ),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() }),
+                            cursorBrush = Brush.verticalGradient(listOf(Accent, AccentGlow)),
+                            modifier = Modifier
+                                .weight(1f)
+                                .focusRequester(searchFocusRequester),
+                            decorationBox = { innerTextField ->
+                                Box(contentAlignment = Alignment.CenterStart) {
+                                    if (searchQuery.isEmpty()) {
+                                        Text(
+                                            "Search games...",
+                                            style = TextStyle(
+                                                color = TextSecondary,
+                                                fontSize = 15.sp
+                                            )
+                                        )
+                                    }
+                                    innerTextField()
+                                }
+                            }
+                        )
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(
+                                onClick = { onSearchQueryChange("") },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Clear",
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        } // end Column
     }
 
     // PS5-style Library Carousel
@@ -1098,6 +1296,7 @@ class UnifiedActivity : ComponentActivity() {
         epicApps: List<EpicGame>,
         gogApps: List<GOGGame>,
         libraryRefreshKey: Int = 0,
+        searchQuery: String = "",
     ) {
         val context = LocalContext.current
 
@@ -1172,6 +1371,11 @@ class UnifiedActivity : ComponentActivity() {
             }
         }
 
+        val displayedApps = remember(installedApps, searchQuery) {
+            if (searchQuery.isBlank()) installedApps
+            else installedApps.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        }
+
         if (installedApps.isEmpty()) {
             if (!isLoggedIn) {
                 LoginRequiredScreen("Library") {
@@ -1190,253 +1394,77 @@ class UnifiedActivity : ComponentActivity() {
             return
         }
 
-        val listState = rememberLazyListState(initialFirstVisibleItemIndex = 0)
-        var centerIdx by remember { mutableIntStateOf(0) }
-        var snapAfterTouchScroll by remember { mutableStateOf(false) }
-
-        // When entering the library tab for the first time or when it becomes empty -> full, 
-        // ensure we start at the beginning. But don't reset every time the sync status updates
-        // to avoid "cutting out" while the user is browsing.
-        val hasApps = installedApps.isNotEmpty()
-        LaunchedEffect(hasApps) {
-            if (hasApps) {
-                listState.scrollToItem(0)
-                centerIdx = 0
-            }
-        }
-
-        // Listen for D-Pad / Left Joystick carousel scroll commands
-        val activity = LocalContext.current as? UnifiedActivity
-        LaunchedEffect(listState, installedApps) {
-            activity?.libraryScrollFlow?.collect { direction ->
-                // Use a tighter throttle in the collector as the primary throttle is now in the Activity
-                val targetIdx = (centerIdx + direction).coerceIn(0, (installedApps.size - 1).coerceAtLeast(0))
-                if (targetIdx != centerIdx) {
-                    centerIdx = targetIdx
-                    listState.animateScrollToItem(targetIdx)
-                }
-            }
-        }
-
-        // Touch Scroll Support: Update centerIdx as the user scrolls
-        LaunchedEffect(listState, installedApps) {
-            snapshotFlow { 
-                val layoutInfo = listState.layoutInfo
-                val visibleItems = layoutInfo.visibleItemsInfo
-                if (visibleItems.isEmpty()) -1
-                else {
-                    val viewportWidthPx = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
-                    val center = viewportWidthPx / 2 + layoutInfo.viewportStartOffset
-                    visibleItems.minBy { kotlin.math.abs((it.offset + it.size / 2) - center) }.index
-                }
-            }.collect { newIdx ->
-                if (newIdx != -1 && newIdx != centerIdx) {
-                    centerIdx = newIdx
-                }
-            }
-        }
-
-        // Auto-snap to center after touch scrolling stops
-        LaunchedEffect(listState.isScrollInProgress) {
-            if (listState.isScrollInProgress) {
-                snapAfterTouchScroll = true
-            } else if (snapAfterTouchScroll && installedApps.isNotEmpty()) {
-                snapAfterTouchScroll = false
-                listState.animateScrollToItem(centerIdx)
-            }
-        }
-
-        // Track which game is selected for the top-right "Game Settings" button
-        val selectedApp = installedApps.getOrNull(centerIdx)
         var selectedAppForSettings by remember { mutableStateOf<SteamApp?>(null) }
         var selectedGogGameForSettings by remember { mutableStateOf<GOGGame?>(null) }
-        
-        LaunchedEffect(selectedApp) {
-            selectedSteamAppId = selectedApp?.id ?: 0
-            selectedSteamAppName = selectedApp?.name ?: ""
-            val gogGame = selectedApp?.let { gogByPseudoId[it.id] }
+        val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+        val activity = LocalContext.current as? UnifiedActivity
+
+        // Keep activity's item count in sync
+        LaunchedEffect(displayedApps.size) {
+            activity?.libraryItemCount = displayedApps.size
+        }
+
+        // FocusRequesters for each grid item
+        val focusRequesters = remember(displayedApps.size) {
+            List(displayedApps.size) { FocusRequester() }
+        }
+
+        // Observe focus index changes from the activity and request focus on the target item
+        val focusIndex by (activity?.libraryFocusIndex ?: kotlinx.coroutines.flow.MutableStateFlow(0)).collectAsState()
+        LaunchedEffect(focusIndex, focusRequesters.size) {
+            if (focusRequesters.isNotEmpty() && focusIndex in focusRequesters.indices) {
+                // Scroll to make the focused item visible
+                gridState.animateScrollToItem(focusIndex)
+                try { focusRequesters[focusIndex].requestFocus() } catch (_: Exception) {}
+            }
+        }
+
+        // Track selected app for the top-right Game Settings button
+        LaunchedEffect(focusIndex, displayedApps) {
+            val app = displayedApps.getOrNull(focusIndex) ?: displayedApps.firstOrNull()
+            selectedSteamAppId = app?.id ?: 0
+            selectedSteamAppName = app?.name ?: ""
+            val gogGame = app?.let { gogByPseudoId[it.id] }
             selectedLibrarySource = when {
                 gogGame != null -> "GOG"
-                selectedApp == null -> ""
-                selectedApp.id >= 2000000000 -> "EPIC"
-                selectedApp.id < 0 -> "CUSTOM"
+                app == null -> ""
+                app.id >= 2000000000 -> "EPIC"
+                app.id < 0 -> "CUSTOM"
                 else -> "STEAM"
             }
             selectedGogGameId = gogGame?.id.orEmpty()
         }
 
-        // Use half screen width for content padding so first/last item can center
-        val screenWidthDp = LocalConfiguration.current.screenWidthDp.dp
-        val itemWidth = 140.dp
-        val centerPadding = (screenWidthDp - itemWidth) / 2
-
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.Center
+        BoxWithConstraints(
+            Modifier
+                .fillMaxSize()
+                .padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+        ) {
+            val borderInset = 6.dp
+            val rowHeight = (maxHeight - 12.dp - borderInset * 2) / 2 // 12dp = grid spacing, borderInset = chasing border room
+            LazyVerticalGrid(
+                state = gridState,
+                columns = GridCells.Fixed(4),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = borderInset + 10.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { clip = false }
             ) {
-
-                // Horizontal carousel
-                LazyRow(
-                    state = listState,
-                    modifier = Modifier.fillMaxWidth().height(260.dp),
-                    contentPadding = PaddingValues(horizontal = centerPadding),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    itemsIndexed(installedApps) { index, app ->
-                        val isCentered = index == centerIdx
-                        val targetScale by animateFloatAsState(
-                            targetValue = if (isCentered) 1.15f else 0.85f,
-                            animationSpec = spring(
-                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                stiffness = Spring.StiffnessMedium
-                            ),
-                            label = "capsuleScale"
-                        )
-                        val shadowElevation by animateFloatAsState(
-                            targetValue = if (isCentered) 24f else 2f,
-                            spring(stiffness = Spring.StiffnessMedium),
-                            label = "shadowElev"
-                        )
-                        val titleAlpha by animateFloatAsState(
-                            targetValue = if (isCentered) 1f else 0.5f,
-                            spring(stiffness = Spring.StiffnessMedium),
-                            label = "titleAlpha"
-                        )
-
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier
-                                .width(itemWidth)
-                                .graphicsLayer {
-                                    scaleX = targetScale
-                                    scaleY = targetScale
-                                }
-                        ) {
-                            GameCapsule(
-                                app = app,
-                                gogGame = gogByPseudoId[app.id],
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .shadow(
-                                        shadowElevation.dp,
-                                        RoundedCornerShape(12.dp),
-                                        spotColor = if (isCentered) Color.Black.copy(alpha = 0.6f) else Color.Transparent
-                                    )
-                                    .then(if (isCentered) Modifier.border(4.dp, Accent.copy(alpha = 0.8f), RoundedCornerShape(12.dp)) else Modifier)
-                            )
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(24.dp))
-
-                // Selected game details
-                if (selectedApp != null) {
-                    val selectedGogGame = gogByPseudoId[selectedApp.id]
-                    val isPS = ControllerHelper.isPlayStationController()
-                    val isController = ControllerHelper.isControllerConnected()
-
-                    Column(
+                itemsIndexed(displayedApps) { index, app ->
+                    GameCapsule(
+                        app = app,
+                        gogGame = gogByPseudoId[app.id],
+                        isFocusedOverride = index == focusIndex,
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 32.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(SurfaceDark)
-                            .padding(20.dp)
-                    ) {
-                        Text(
-                            selectedApp.name,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            if (selectedApp.developer.isNotEmpty()) {
-                                Text(selectedApp.developer, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                            }
-                            val isCustom = selectedApp.id < 0
-                            val isEpic = selectedApp.id >= 2000000000
-                            val installed = when {
-                                selectedGogGame != null -> true
-                                isCustom -> true
-                                isEpic -> true
-                                else -> SteamService.isAppInstalled(selectedApp.id)
-                            }
-                            Text(
-                                if (installed) "● Installed" else "○ Not Installed",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (installed) StatusOnline else TextSecondary
+                            .height(rowHeight)
+                            .then(
+                                if (index in focusRequesters.indices)
+                                    Modifier.focusRequester(focusRequesters[index])
+                                else Modifier
                             )
-                            if (isCustom) {
-                                Text("Custom", style = MaterialTheme.typography.bodySmall, color = Accent)
-                            } else if (selectedGogGame != null) {
-                                Text("GOG", style = MaterialTheme.typography.bodySmall, color = Accent)
-                            }
-                        }
-                        Spacer(Modifier.height(16.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            val context = LocalContext.current
-                            val containerManager = remember { ContainerManager(context) }
-                            val isCustom = selectedApp.id < 0
-                            val isEpic = selectedApp.id >= 2000000000
-
-                            if (isCustom || isEpic || selectedGogGame != null || SteamService.isAppInstalled(selectedApp.id)) {
-                                Button(
-                                    onClick = {
-                                        if (isCustom) {
-                                            launchCustomGame(context, containerManager, selectedApp.name)
-                                        } else if (selectedGogGame != null) {
-                                            launchGogGame(context, containerManager, selectedGogGame)
-                                        } else if (isEpic) {
-                                            epicApps.find { 2000000000 + it.id == selectedApp.id }?.let {
-                                                launchEpicGame(context, containerManager, it)
-                                            }
-                                        } else {
-                                            launchSteamGame(context, containerManager, selectedApp)
-                                        }
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) { 
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("PLAY", fontWeight = FontWeight.Bold)
-                                        if (isController) {
-                                            Spacer(Modifier.width(8.dp))
-                                            ControllerBadge(if (isPS) "Cross" else "A")
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (!isCustom && selectedGogGame == null) {
-                                OutlinedButton(
-                                    onClick = { selectedAppForSettings = selectedApp },
-                                    shape = RoundedCornerShape(12.dp)
-                                ) { 
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("Game Settings", color = TextSecondary)
-                                        if (isController) {
-                                            Spacer(Modifier.width(8.dp))
-                                            ControllerBadge(if (isPS) "Triangle" else "Y")
-                                        }
-                                    }
-                                }
-                            }
-                            if (selectedGogGame != null) {
-                                OutlinedButton(
-                                    onClick = { selectedGogGameForSettings = selectedGogGame },
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text("Manage", color = TextSecondary)
-                                }
-                            }
-                        }
-                    }
+                    )
                 }
             }
         }
@@ -1887,9 +1915,9 @@ class UnifiedActivity : ComponentActivity() {
         }
     }
 
-    // ─── Single game capsule for carousel ─────────────────────────────
+    // Single game capsule for carousel
     @Composable
-    private fun GameCapsule(app: SteamApp, gogGame: GOGGame? = null, modifier: Modifier = Modifier) {
+    private fun GameCapsule(app: SteamApp, gogGame: GOGGame? = null, isFocusedOverride: Boolean = false, modifier: Modifier = Modifier) {
         val context = LocalContext.current
         val isCustom = app.id < 0
         val isEpic = app.id >= 2000000000
@@ -1897,11 +1925,16 @@ class UnifiedActivity : ComponentActivity() {
         val epicGame by produceState<EpicGame?>(initialValue = null, key1 = epicId) {
             value = if (isEpic) db.epicGameDao().getById(epicId) else null
         }
+        val isFocused = isFocusedOverride
 
         Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
             modifier = modifier
-                .clip(RoundedCornerShape(12.dp))
-                .background(CardDark)
+                .fillMaxWidth()
+                .border(1.dp, CardDark, RoundedCornerShape(12.dp))
+                .chasingBorder(isFocused = isFocused, cornerRadius = 12.dp)
+                .background(CardDark, RoundedCornerShape(12.dp))
+                .focusable()
                 .clickable {
                     val containerManager = com.winlator.cmod.container.ContainerManager(context)
                     if (isCustom) {
@@ -1915,68 +1948,77 @@ class UnifiedActivity : ComponentActivity() {
                     }
                 }
         ) {
-            if (isCustom) {
-                // Custom game artwork — load extracted exe icon, fallback to gamepad
-                val safeName = app.name.replace("/", "_").replace("\\", "_")
-                val iconFile = java.io.File(context.filesDir, "custom_icons/$safeName.png")
-                if (iconFile.exists()) {
+            // Art area — clip only on the image, not the text
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+            ) {
+                val artModifier = Modifier.fillMaxSize()
+                if (isCustom) {
+                    val safeName = app.name.replace("/", "_").replace("\\", "_")
+                    val iconFile = java.io.File(context.filesDir, "custom_icons/$safeName.png")
+                    if (iconFile.exists()) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(iconFile)
+                                .crossfade(300)
+                                .build(),
+                            contentDescription = app.name,
+                            modifier = artModifier,
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Box(
+                            modifier = artModifier.background(SurfaceDark),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.SportsEsports, contentDescription = app.name, tint = Accent.copy(alpha = 0.6f), modifier = Modifier.size(64.dp))
+                        }
+                    }
+                } else if (gogGame != null) {
                     AsyncImage(
                         model = ImageRequest.Builder(context)
-                            .data(iconFile)
+                            .data(gogGame.imageUrl.ifEmpty { gogGame.iconUrl })
                             .crossfade(300)
                             .build(),
                         contentDescription = app.name,
-                        modifier = Modifier.fillMaxWidth().height(175.dp),
+                        modifier = artModifier,
+                        contentScale = ContentScale.Crop
+                    )
+                } else if (isEpic) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(epicGame?.primaryImageUrl ?: epicGame?.iconUrl)
+                            .crossfade(300)
+                            .build(),
+                        contentDescription = app.name,
+                        modifier = artModifier,
                         contentScale = ContentScale.Crop
                     )
                 } else {
-                    Box(
-                        modifier = Modifier.fillMaxWidth().height(175.dp).background(SurfaceDark),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Default.SportsEsports, contentDescription = app.name, tint = Accent.copy(alpha = 0.6f), modifier = Modifier.size(64.dp))
-                    }
+                    val imageUrl = app.getCapsuleUrl()
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(imageUrl)
+                            .crossfade(300)
+                            .build(),
+                        contentDescription = app.name,
+                        modifier = artModifier,
+                        contentScale = ContentScale.Crop
+                    )
                 }
-            } else if (gogGame != null) {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(gogGame.imageUrl.ifEmpty { gogGame.iconUrl })
-                        .crossfade(300)
-                        .build(),
-                    contentDescription = app.name,
-                    modifier = Modifier.fillMaxWidth().height(175.dp),
-                    contentScale = ContentScale.Crop
-                )
-            } else if (isEpic) {
-                // Epic game artwork
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(epicGame?.primaryImageUrl ?: epicGame?.iconUrl)
-                        .crossfade(300)
-                        .build(),
-                    contentDescription = app.name,
-                    modifier = Modifier.fillMaxWidth().height(175.dp),
-                    contentScale = ContentScale.Crop
-                )
-            } else {
-                // Artwork — tiered fallback implemented in SteamApp model
-                val imageUrl = app.getCapsuleUrl()
-
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(imageUrl)
-                        .crossfade(300)
-                        .build(),
-                    contentDescription = app.name,
-                    modifier = Modifier.fillMaxWidth().height(175.dp),
-                    contentScale = ContentScale.Crop
-                )
             }
 
+            // Title below art, outside the clipped area
             Text(
                 text = app.name,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp),
-                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 4.dp)
+                    .then(if (isFocused) Modifier.basicMarquee(iterations = Int.MAX_VALUE) else Modifier),
+                style = MaterialTheme.typography.bodySmall,
                 color = TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1988,7 +2030,7 @@ class UnifiedActivity : ComponentActivity() {
 
     // Epic Store Tab
     @Composable
-    fun EpicStoreTab(isLoggedIn: Boolean, onLoginClick: () -> Unit) {
+    fun EpicStoreTab(isLoggedIn: Boolean, searchQuery: String = "", onLoginClick: () -> Unit) {
         val context = LocalContext.current
         
         if (!isLoggedIn) {
@@ -2030,17 +2072,25 @@ class UnifiedActivity : ComponentActivity() {
             }
         }
 
-        Column(Modifier.fillMaxSize().padding(16.dp)) {
+        val displayedApps = remember(epicApps, searchQuery) {
+            if (searchQuery.isBlank()) epicApps
+            else epicApps.filter { it.title.contains(searchQuery, ignoreCase = true) }
+        }
+
+        BoxWithConstraints(Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp)) {
+            val rowHeight = (maxHeight - 12.dp) / 2
             LazyVerticalGrid(
                 state = gridState,
-                columns = GridCells.Adaptive(minSize = 150.dp),
+                columns = GridCells.Fixed(4),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(items = epicApps) { app: EpicGame ->
-                    EpicStoreCapsule(app) {
-                        selectedAppId.value = app.id
+                items(items = displayedApps) { app: EpicGame ->
+                    Box(Modifier.height(rowHeight)) {
+                        EpicStoreCapsule(app) {
+                            selectedAppId.value = app.id
+                        }
                     }
                 }
             }
@@ -2059,23 +2109,28 @@ class UnifiedActivity : ComponentActivity() {
     fun EpicStoreCapsule(app: com.winlator.cmod.epic.data.EpicGame, onClick: () -> Unit) {
         val context = LocalContext.current
         var isFocused by remember { mutableStateOf(false) }
-        val borderColor = if (isFocused) Accent.copy(alpha = 0.8f) else Color.Transparent
 
         Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
-                .width(160.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(CardDark)
-                .border(4.dp, borderColor, RoundedCornerShape(16.dp))
+                .fillMaxSize()
+                .border(1.dp, CardDark, RoundedCornerShape(16.dp))
+                .chasingBorder(isFocused = isFocused, cornerRadius = 16.dp)
+                .background(CardDark, RoundedCornerShape(16.dp))
                 .onFocusChanged { isFocused = it.isFocused }
                 .focusable()
                 .clickable(onClick = onClick)
         ) {
-            Box {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+            ) {
                 AsyncImage(
                     model = ImageRequest.Builder(context).data(app.primaryImageUrl).crossfade(300).build(),
                     contentDescription = app.title,
-                    modifier = Modifier.fillMaxWidth().height(165.dp),
+                    modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
                 )
 
@@ -2090,11 +2145,13 @@ class UnifiedActivity : ComponentActivity() {
 
             Text(
                 app.title,
-                modifier = Modifier.padding(12.dp).fillMaxWidth(),
-                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp).fillMaxWidth()
+                    .then(if (isFocused) Modifier.basicMarquee(iterations = Int.MAX_VALUE) else Modifier),
+                style = MaterialTheme.typography.bodySmall,
                 color = TextPrimary,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
             )
         }
     }
@@ -2124,11 +2181,14 @@ class UnifiedActivity : ComponentActivity() {
                             AsyncImage(
                                 model = ImageRequest.Builder(LocalContext.current)
                                     .data(heroImageUrl)
-                                    .crossfade(300)
+                                    .crossfade(150)
+                                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
                                     .build(),
                                 contentDescription = "$title artwork",
                                 modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
+                                contentScale = ContentScale.FillWidth,
+                                alignment = Alignment.TopCenter
                             )
                             Box(
                                 modifier = Modifier
@@ -2405,7 +2465,7 @@ class UnifiedActivity : ComponentActivity() {
     }
 
     @Composable
-    fun GOGStoreTab(isLoggedIn: Boolean, onLoginClick: () -> Unit) {
+    fun GOGStoreTab(isLoggedIn: Boolean, searchQuery: String = "", onLoginClick: () -> Unit) {
         if (!isLoggedIn) {
             LoginRequiredScreen("GOG", onLoginClick)
             return
@@ -2415,31 +2475,44 @@ class UnifiedActivity : ComponentActivity() {
         val selectedGameId = remember { mutableStateOf<String?>(null) }
         val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
 
-        Column(Modifier.fillMaxSize().padding(16.dp)) {
+        val displayedApps = remember(gogApps, searchQuery) {
+            if (searchQuery.isBlank()) gogApps
+            else gogApps.filter { it.title.contains(searchQuery, ignoreCase = true) }
+        }
+
+        BoxWithConstraints(Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp)) {
+            val rowHeight = (maxHeight - 12.dp) / 2
             LazyVerticalGrid(
                 state = gridState,
-                columns = GridCells.Adaptive(minSize = 150.dp),
+                columns = GridCells.Fixed(4),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(gogApps) { app ->
+                items(displayedApps) { app ->
                     val isInstalled = app.isInstalled && java.io.File(app.installPath).exists()
                     Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
-                            .width(160.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(CardDark)
+                            .fillMaxWidth()
+                            .height(rowHeight)
+                            .border(1.dp, CardDark, RoundedCornerShape(16.dp))
+                            .background(CardDark, RoundedCornerShape(16.dp))
                             .clickable { selectedGameId.value = app.id }
                     ) {
-                        Box {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                        ) {
                             AsyncImage(
                                 model = ImageRequest.Builder(LocalContext.current)
                                     .data(app.imageUrl.ifEmpty { app.iconUrl })
                                     .crossfade(300)
                                     .build(),
                                 contentDescription = null,
-                                modifier = Modifier.fillMaxWidth().height(165.dp),
+                                modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
                             )
                             if (isInstalled) {
@@ -2454,11 +2527,12 @@ class UnifiedActivity : ComponentActivity() {
 
                         Text(
                             text = app.title,
-                            modifier = Modifier.padding(8.dp),
-                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
                             color = TextPrimary,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
@@ -2598,7 +2672,7 @@ class UnifiedActivity : ComponentActivity() {
 
     // Steam Store Tab
     @Composable
-    fun SteamStoreTab(isLoggedIn: Boolean, steamApps: List<SteamApp>) {
+    fun SteamStoreTab(isLoggedIn: Boolean, steamApps: List<SteamApp>, searchQuery: String = "") {
         if (!isLoggedIn) {
             LoginRequiredScreen("Steam") {
                 startActivity(Intent(this@UnifiedActivity, SteamLoginActivity::class.java))
@@ -2650,17 +2724,25 @@ class UnifiedActivity : ComponentActivity() {
             }
         }
 
-        Column(Modifier.fillMaxSize().padding(16.dp)) {
+        val displayedApps = remember(steamApps, searchQuery) {
+            if (searchQuery.isBlank()) steamApps
+            else steamApps.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        }
+
+        BoxWithConstraints(Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp)) {
+            val rowHeight = (maxHeight - 12.dp) / 2
 
             LazyVerticalGrid(
                 state = gridState,
-                columns = GridCells.Adaptive(minSize = 150.dp),
+                columns = GridCells.Fixed(4),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(steamApps) { app ->
-                    SteamStoreCapsule(app, onClick = { selectedAppForDialog = app })
+                items(displayedApps) { app ->
+                    Box(Modifier.height(rowHeight)) {
+                        SteamStoreCapsule(app, onClick = { selectedAppForDialog = app })
+                    }
                 }
             }
         }
@@ -2678,25 +2760,30 @@ class UnifiedActivity : ComponentActivity() {
         val isInstalled = SteamService.isAppInstalled(app.id)
         val context = LocalContext.current
         var isFocused by remember { mutableStateOf(false) }
-        val borderColor = if (isFocused) Accent.copy(alpha = 0.8f) else Color.Transparent
 
         Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
-                .width(160.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(CardDark)
-                .border(4.dp, borderColor, RoundedCornerShape(16.dp))
+                .fillMaxSize()
+                .border(1.dp, CardDark, RoundedCornerShape(16.dp))
+                .chasingBorder(isFocused = isFocused, cornerRadius = 16.dp)
+                .background(CardDark, RoundedCornerShape(16.dp))
                 .onFocusChanged { isFocused = it.isFocused }
                 .focusable()
                 .clickable(onClick = onClick)
         ) {
-            Box {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+            ) {
                 val imageUrl = app.getCapsuleUrl()
 
                 AsyncImage(
                     model = ImageRequest.Builder(context).data(imageUrl).crossfade(300).build(),
                     contentDescription = null,
-                    modifier = Modifier.fillMaxWidth().height(165.dp),
+                    modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
                 )
 
@@ -2712,11 +2799,13 @@ class UnifiedActivity : ComponentActivity() {
 
             Text(
                 text = app.name,
-                modifier = Modifier.padding(8.dp),
-                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp)
+                    .then(if (isFocused) Modifier.basicMarquee(iterations = Int.MAX_VALUE) else Modifier),
+                style = MaterialTheme.typography.bodySmall,
                 color = TextPrimary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
             )
         }
     }
@@ -2759,6 +2848,38 @@ class UnifiedActivity : ComponentActivity() {
                 }
                 
                 val cancelLabel = if (selectedId == null) "Cancel All" else "Cancel"
+
+                // Download Queue Size
+                var queueSize by remember { mutableIntStateOf(PrefManager.downloadQueueSize) }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(SurfaceDark)
+                        .padding(horizontal = 4.dp, vertical = 4.dp)
+                ) {
+                    IconButton(
+                        onClick = { if (queueSize > 1) { queueSize--; PrefManager.downloadQueueSize = queueSize } },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "Decrease Queue", tint = TextPrimary, modifier = Modifier.size(18.dp))
+                    }
+                    Text(
+                        text = queueSize.toString(),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 2.dp)
+                    )
+                    IconButton(
+                        onClick = { queueSize++; PrefManager.downloadQueueSize = queueSize },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Increase Queue", tint = TextPrimary, modifier = Modifier.size(18.dp))
+                    }
+                }
+
+                Spacer(Modifier.width(12.dp))
 
                 Button(
                     onClick = {
@@ -3065,7 +3186,7 @@ class UnifiedActivity : ComponentActivity() {
 
         StoreInstallDialogShell(
             title = app.name,
-            heroImageUrl = app.getHeroUrl(large = true),
+            heroImageUrl = app.getHeroUrl(),
             subtitle = listOfNotNull(
                 app.developer.takeIf { it.isNotBlank() },
                 app.publisher.takeIf { it.isNotBlank() }
