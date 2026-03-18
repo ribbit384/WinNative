@@ -84,10 +84,6 @@ public class GamepadState {
             return dpad[2];
         if (buttonCode == BUTTON_DPAD_LEFT)
             return dpad[3];
-        // Guide button is not currently tracked in the bitmask by ExternalController
-        // but WinHandler checks it
-        if (buttonCode == BUTTON_GUIDE)
-            return false;
 
         return isPressed(buttonCode);
     }

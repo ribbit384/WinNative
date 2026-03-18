@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 
 public class InputControlsManager {
+    private static final int ASSET_PROFILE_SYNC_REVISION = 1;
     private final Context context;
     private ArrayList<ControlsProfile> profiles;
     private int maxProfileId;
@@ -68,8 +69,12 @@ public class InputControlsManager {
 
         int newVersion = AppUtils.getVersionCode(context);
         int oldVersion = preferences.getInt("inputcontrols_app_version", 0);
-        if (oldVersion == newVersion) return;
-        preferences.edit().putInt("inputcontrols_app_version", newVersion).apply();
+        int oldSyncRevision = preferences.getInt("inputcontrols_asset_sync_revision", 0);
+        if (oldVersion == newVersion && oldSyncRevision >= ASSET_PROFILE_SYNC_REVISION) return;
+        preferences.edit()
+                .putInt("inputcontrols_app_version", newVersion)
+                .putInt("inputcontrols_asset_sync_revision", ASSET_PROFILE_SYNC_REVISION)
+                .apply();
 
         File[] files = profilesDir.listFiles();
         if (files == null) return;

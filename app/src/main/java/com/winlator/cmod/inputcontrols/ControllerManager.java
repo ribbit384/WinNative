@@ -87,27 +87,7 @@ public class ControllerManager {
     }
 
     public static boolean isGameController(InputDevice d) {
-        if (d == null)
-            return false;
-        int s = d.getSources();
-        boolean hasControllerBits = ((s & InputDevice.SOURCE_JOYSTICK) != 0) || ((s & InputDevice.SOURCE_GAMEPAD) != 0);
-        if (!hasControllerBits)
-            return false;
-
-        for (InputDevice.MotionRange r : d.getMotionRanges()) {
-            int src = r.getSource();
-            if ((src & (InputDevice.SOURCE_JOYSTICK | InputDevice.SOURCE_GAMEPAD)) != 0)
-                return true;
-        }
-
-        int[] keys = { KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BUTTON_X,
-                KeyEvent.KEYCODE_BUTTON_Y };
-        boolean[] present = d.hasKeys(keys);
-        for (boolean p : present)
-            if (p)
-                return true;
-
-        return false;
+        return ExternalController.isGameController(d);
     }
 
     public static String getDeviceIdentifier(InputDevice device) {

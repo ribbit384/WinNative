@@ -18,30 +18,47 @@ DLL_NAMES=(
 )
 
 rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR/x64" "$BUILD_DIR/x86" "$PACKAGE_ROOT/system32" "$PACKAGE_ROOT/syswow64" "$ASSET_DIR"
+mkdir -p "$BUILD_DIR/x64" "$BUILD_DIR/x86" "$BUILD_DIR/arm64" "$BUILD_DIR/arm64ec"
+mkdir -p "$PACKAGE_ROOT/system32" "$PACKAGE_ROOT/syswow64" "$PACKAGE_ROOT/sysarm64" "$PACKAGE_ROOT/sysarm64ec" "$ASSET_DIR"
 
-x86_64-w64-mingw32-gcc \
-  -O2 -s -shared \
-  -Wall -Wextra \
-  -Wl,--kill-at \
-  "$SRC_DIR/xinput_virtual.c" \
-  "$SRC_DIR/xinput_virtual.def" \
-  -o "$BUILD_DIR/x64/xinput_virtual.dll"
+# x64
+if command -v x86_64-w64-mingw32-gcc >/dev/null; then
+  x86_64-w64-mingw32-gcc -O2 -s -shared -Wall -Wextra -Wl,--kill-at "$SRC_DIR/xinput_virtual.c" "$SRC_DIR/xinput_virtual.def" -o "$BUILD_DIR/x64/xinput_virtual.dll"
+  for dll in "${DLL_NAMES[@]}"; do cp "$BUILD_DIR/x64/xinput_virtual.dll" "$PACKAGE_ROOT/system32/$dll"; done
+else
+  echo "Warning: x86_64-w64-mingw32-gcc not found, skipping x64 build."
+fi
 
-i686-w64-mingw32-gcc \
-  -O2 -s -shared \
-  -Wall -Wextra \
-  -Wl,--kill-at \
-  "$SRC_DIR/xinput_virtual.c" \
-  "$SRC_DIR/xinput_virtual.def" \
-  -o "$BUILD_DIR/x86/xinput_virtual.dll"
+# x86
+if command -v i686-w64-mingw32-gcc >/dev/null; then
+  i686-w64-mingw32-gcc -O2 -s -shared -Wall -Wextra -Wl,--kill-at "$SRC_DIR/xinput_virtual.c" "$SRC_DIR/xinput_virtual.def" -o "$BUILD_DIR/x86/xinput_virtual.dll"
+  for dll in "${DLL_NAMES[@]}"; do cp "$BUILD_DIR/x86/xinput_virtual.dll" "$PACKAGE_ROOT/syswow64/$dll"; done
+else
+  echo "Warning: i686-w64-mingw32-gcc not found, skipping x86 build."
+fi
 
-for dll in "${DLL_NAMES[@]}"; do
-  cp "$BUILD_DIR/x64/xinput_virtual.dll" "$PACKAGE_ROOT/system32/$dll"
-  cp "$BUILD_DIR/x86/xinput_virtual.dll" "$PACKAGE_ROOT/syswow64/$dll"
-done
+# arm64 (Standard ARM64 Windows)
+if command -v aarch64-w64-mingw32-gcc >/dev/null; then
+  aarch64-w64-mingw32-gcc -O2 -s -shared -Wall -Wextra -Wl,--kill-at "$SRC_DIR/xinput_virtual.c" "$SRC_DIR/xinput_virtual.def" -o "$BUILD_DIR/arm64/xinput_virtual.dll"
+  for dll in "${DLL_NAMES[@]}"; do cp "$BUILD_DIR/arm64/xinput_virtual.dll" "$PACKAGE_ROOT/sysarm64/$dll"; done
+else
+  echo "Warning: aarch64-w64-mingw32-gcc not found, skipping arm64 build."
+fi
 
-tar -C "$PACKAGE_ROOT" -cf "$BUILD_DIR/xinput_virtual.tar" .
-zstd -19 -f "$BUILD_DIR/xinput_virtual.tar" -o "$ASSET_PATH"
+# arm64ec (Emulation Compatible ARM64)
+# Requires LLVM/Clang with -arm64ec target support
+if command -v clang >/dev/null && clang -print-targets | grep -q arm64ec; then
+  clang -target arm64ec-pc-windows-msvc -O2 -shared -Wall -Wextra "$SRC_DIR/xinput_virtual.c" "$SRC_DIR/xinput_virtual.def" -o "$BUILD_DIR/arm64ec/xinput_virtual.dll"
+  for dll in "${DLL_NAMES[@]}"; do cp "$BUILD_DIR/arm64ec/xinput_virtual.dll" "$PACKAGE_ROOT/sysarm64ec/$dll"; done
+else
+  echo "Warning: arm64ec-aware clang not found, skipping arm64ec build."
+fi
 
-echo "Built $ASSET_PATH"
+if [ -d "$PACKAGE_ROOT" ]; then
+  tar -C "$PACKAGE_ROOT" -cf "$BUILD_DIR/xinput_virtual.tar" .
+  zstd -19 -f "$BUILD_DIR/xinput_virtual.tar" -o "$ASSET_PATH"
+  echo "Built $ASSET_PATH"
+else
+  echo "Error: No DLLs were built."
+  exit 1
+fi

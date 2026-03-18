@@ -109,6 +109,7 @@ static int (*p_SDL_JoystickAttachVirtualEx)(const SDL_VirtualJoystickDesc *);
 static int (*p_SDL_JoystickSetVirtualAxis)(SDL_Joystick *, int, int16_t);
 static int (*p_SDL_JoystickSetVirtualButton)(SDL_Joystick *, int, uint8_t);
 static int (*p_SDL_JoystickSetVirtualHat)(SDL_Joystick *, int, uint8_t);
+
 static void (*p_SDL_PumpEvents)(void);
 static void (*p_SDL_Delay)(uint32_t);
 static void (*p_SDL_GetVersion)(SDL_version *);
@@ -379,6 +380,7 @@ __attribute__((constructor)) static void initialize_all_pads(void) {
   GETFUNCPTR(SDL_JoystickSetVirtualAxis);
   GETFUNCPTR(SDL_JoystickSetVirtualButton);
   GETFUNCPTR(SDL_JoystickSetVirtualHat);
+
   GETFUNCPTR(SDL_PumpEvents);
   GETFUNCPTR(SDL_Delay);
   GETFUNCPTR(SDL_GetVersion);
@@ -395,25 +397,8 @@ __attribute__((constructor)) static void initialize_all_pads(void) {
     g_num_players = MAX_GAMEPADS;
 
   const char *data_path = getenv("EVSHIM_DATA_PATH");
-  static char derived_path[512];
-  if (!data_path || !*data_path) {
-    const char *home = getenv("HOME");
-    if (home && *home) {
-      const char *home_marker = strstr(home, "/home/");
-      if (home_marker) {
-        size_t prefix_len = (size_t)(home_marker - home);
-        if (prefix_len + 5 < sizeof(derived_path)) {
-          memcpy(derived_path, home, prefix_len);
-          derived_path[prefix_len] = '\0';
-          strncat(derived_path, "/tmp",
-                  sizeof(derived_path) - strlen(derived_path) - 1);
-          data_path = derived_path;
-        }
-      }
-    }
-  }
-  if (!data_path || !*data_path)
-    data_path = "/data/user/0/com.winnative.cmod/files/imagefs/tmp";
+  if (!data_path)
+    data_path = "/data/data/com.winlator.cmod/files/imagefs/tmp";
 
   /* Store path globally for hotplug detection */
   strncpy(g_data_path, data_path, sizeof(g_data_path) - 1);
@@ -503,3 +488,4 @@ int open(const char *path, int flags, ...) {
   va_end(ap);
   return real_open(path, flags, mode);
 }
+

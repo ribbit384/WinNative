@@ -59,6 +59,7 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     private Container container;
     private final Shortcut shortcut;
     private File workingDir;
+    private String steamType = Container.STEAM_TYPE_NORMAL;
 
     public void setWorkingDir(File workingDir) {
         this.workingDir = workingDir;
@@ -73,6 +74,94 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
 
     public Container getContainer() { return this.container; }
     public void setContainer(Container container) { this.container = container; }
+
+    public String getSteamType() { return steamType; }
+    public void setSteamType(String steamType) {
+        if (steamType == null) {
+            this.steamType = Container.STEAM_TYPE_NORMAL;
+            return;
+        }
+        String normalized = steamType.toLowerCase();
+        switch (normalized) {
+            case Container.STEAM_TYPE_LIGHT:
+                this.steamType = Container.STEAM_TYPE_LIGHT;
+                break;
+            case Container.STEAM_TYPE_ULTRALIGHT:
+                this.steamType = Container.STEAM_TYPE_ULTRALIGHT;
+                break;
+            default:
+                this.steamType = Container.STEAM_TYPE_NORMAL;
+        }
+    }
+
+    public String execShellCommand(String command) {
+        return execShellCommand(command, true);
+    }
+
+    public String execShellCommand(String command, boolean includeStderr) {
+        if (environment == null) return "";
+
+        Context context = environment.getContext();
+        ImageFs imageFs = ImageFs.find(context);
+        File rootDir = imageFs.getRootDir();
+        StringBuilder output = new StringBuilder();
+        EnvVars envVars = new EnvVars();
+        envVars.put("HOME", imageFs.home_path);
+        envVars.put("USER", ImageFs.USER);
+        envVars.put("TMPDIR", imageFs.getRootDir().getPath() + "/tmp");
+        envVars.put("DISPLAY", ":0");
+
+        String winePath = wineProfile == null ? imageFs.getWinePath() + "/bin"
+                : ContentsManager.getSourceFile(context, wineProfile, wineProfile.wineBinPath).getAbsolutePath();
+        envVars.put("PATH", winePath + ":" +
+                imageFs.getRootDir().getPath() + "/usr/bin:" +
+                imageFs.getRootDir().getPath() + "/usr/local/bin");
+        envVars.put("LD_LIBRARY_PATH", imageFs.getRootDir().getPath() + "/usr/lib");
+        envVars.put("BOX64_LD_LIBRARY_PATH", imageFs.getRootDir().getPath() + "/usr/lib/x86_64-linux-gnu");
+        envVars.put("ANDROID_SYSVSHM_SERVER", imageFs.getRootDir().getPath() + UnixSocketConfig.SYSVSHM_SERVER_PATH);
+        envVars.put("FONTCONFIG_PATH", imageFs.getRootDir().getPath() + "/usr/etc/fonts");
+
+        File libDir = imageFs.getLibDir();
+        File sysvshm64 = new File(libDir, "libandroid-sysvshm.so");
+        File libredirect64 = new File(libDir, "libredirect.so");
+        if (sysvshm64.exists() || libredirect64.exists()) {
+            StringBuilder ldPreload = new StringBuilder();
+            if (libredirect64.exists()) ldPreload.append(libredirect64.getPath());
+            if (sysvshm64.exists()) {
+                if (ldPreload.length() > 0) ldPreload.append(" ");
+                ldPreload.append(sysvshm64.getPath());
+            }
+            envVars.put("LD_PRELOAD", ldPreload.toString());
+        }
+        envVars.put("WINEESYNC_WINLATOR", "1");
+        if (this.envVars != null) envVars.putAll(this.envVars);
+
+        String finalCommand = rootDir.getPath() + "/usr/local/bin/box64 " + command;
+        try {
+            Log.d("GuestProgramLauncherComponent", "Shell command is " + finalCommand);
+            java.lang.Process process = Runtime.getRuntime().exec(
+                    finalCommand,
+                    envVars.toStringArray(),
+                    workingDir != null ? workingDir : imageFs.getRootDir()
+            );
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            BufferedReader errorReader = new BufferedReader(new InputStreamReader(process.getErrorStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append("\n");
+            }
+            if (includeStderr) {
+                while ((line = errorReader.readLine()) != null) {
+                    output.append(line).append("\n");
+                }
+            }
+            process.waitFor();
+        } catch (Exception e) {
+            output.append("Error: ").append(e.getMessage());
+        }
+
+        return output.toString().trim();
+    }
 
     private String resolveInstalledRuntimeVersion(String currentVersion, ContentProfile.ContentType type) {
         if (currentVersion != null && !currentVersion.isEmpty()) {
@@ -208,9 +297,29 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
                 extractEmulatorsDlls();
             else
                 extractBox64Files();
+            copyDefaultBox64RCFile();
             checkDependencies();
             pid = execGuestProgram();
         }
+    }
+
+    private void copyDefaultBox64RCFile() {
+        Context context = environment.getContext();
+        ImageFs imageFs = ImageFs.find(context);
+        File rootDir = imageFs.getRootDir();
+        String assetPath;
+        switch (steamType) {
+            case Container.STEAM_TYPE_LIGHT:
+                assetPath = "box86_64/lightsteam.box64rc";
+                break;
+            case Container.STEAM_TYPE_ULTRALIGHT:
+                assetPath = "box86_64/ultralightsteam.box64rc";
+                break;
+            default:
+                assetPath = "box86_64/default.box64rc";
+                break;
+        }
+        FileUtils.copy(context, assetPath, new File(rootDir, "/etc/config.box64rc"));
     }
 
 
@@ -315,11 +424,7 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
         }
 
         EnvVars envVars = new EnvVars();
-        boolean enableEvshim = preferences.getBoolean("enable_evshim", false);
-        if (!enableEvshim && this.envVars != null) {
-            String evshimFlag = this.envVars.get("WINNATIVE_ENABLE_EVSHIM");
-            enableEvshim = "1".equals(evshimFlag) || "true".equalsIgnoreCase(evshimFlag) || "yes".equalsIgnoreCase(evshimFlag);
-        }
+        boolean enableEvshim = true;
 
         if (enableEvshim) {
             // --- Controller support: create shared memory files for all 4 slots ---
@@ -341,6 +446,10 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
             }
             envVars.put("EVSHIM_MAX_PLAYERS", String.valueOf(MAX_PLAYERS));
             envVars.put("EVSHIM_DATA_PATH", tmpPath);
+            // Wine's Z: drive maps to imagefs root (container/../..), so tmp/ is Z:\tmp.
+            // xinput_virtual.dll reads EVSHIM_WIN_PATH for a Wine-resolvable path since
+            // EVSHIM_DATA_PATH is an absolute Linux path that resolves incorrectly under Z:.
+            envVars.put("EVSHIM_WIN_PATH", "Z:\\tmp");
         } else {
             Log.d("GuestProgramLauncher", "EVSHIM disabled for compatibility mode");
         }

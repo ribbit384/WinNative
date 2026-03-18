@@ -44,6 +44,8 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.compose.ui.platform.ComposeView;
 import androidx.core.view.GravityCompat;
+import com.winlator.cmod.steam.enums.Marker;
+import com.winlator.cmod.steam.utils.MarkerUtils;
 import com.winlator.cmod.steam.utils.SteamUtils;
 
 import androidx.drawerlayout.widget.DrawerLayout;
@@ -95,6 +97,7 @@ import com.winlator.cmod.renderer.effects.ToonEffect;
 import com.winlator.cmod.widget.FrameRating;
 import com.winlator.cmod.widget.InputControlsView;
 import com.winlator.cmod.widget.LogView;
+import com.winlator.cmod.CloudSyncHelper;
 import com.winlator.cmod.widget.MagnifierView;
 import com.winlator.cmod.widget.TouchpadView;
 import com.winlator.cmod.widget.XServerView;
@@ -835,6 +838,9 @@ public class XServerDisplayActivity extends AppCompatActivity {
                 simulateConfirmInputControlsDialog();
             }
             Executors.newSingleThreadExecutor().execute(() -> {
+                if (shortcut != null) {
+                    CloudSyncHelper.forceDownloadOnContainerSwap(this, shortcut);
+                }
                 setupWineSystemFiles();
                 extractGraphicsDriverFiles();
                 changeWineAudioDriver();
@@ -1481,6 +1487,7 @@ public class XServerDisplayActivity extends AppCompatActivity {
             applyGeneralPatches(container);
             container.putExtra("appVersion", appVersion);
             container.putExtra("imgVersion", imgVersion);
+            firstTimeBoot = true; // force wincomponent DLLs re-extraction on app update
             containerDataChanged = true;
         }
 
@@ -1503,7 +1510,7 @@ public class XServerDisplayActivity extends AppCompatActivity {
         }
 
         String wincomponents = shortcut != null ? shortcut.getExtra("wincomponents", container.getWinComponents()) : container.getWinComponents();
-        if (!wincomponents.equals(container.getExtra("wincomponents"))) {
+        if (!wincomponents.equals(container.getExtra("wincomponents")) || firstTimeBoot) {
             extractWinComponentFiles();
             container.putExtra("wincomponents", wincomponents);
             containerDataChanged = true;
@@ -1516,6 +1523,11 @@ public class XServerDisplayActivity extends AppCompatActivity {
             boolean steamReady = SteamBridge.ensureSteamReady(this);
             Log.d("XServerDisplayActivity", "Steam client ready: " + steamReady);
 
+            // Download and extract the experimental-drm file to provide steamclient_loader_x64.exe
+            if (isSteamGame) {
+                SteamBridge.ensureColdClientSupportReady(this);
+            }
+
             // Verify essential Steam client DLLs exist in the wine prefix
             verifySteamClientFiles();
 
@@ -1525,30 +1537,83 @@ public class XServerDisplayActivity extends AppCompatActivity {
                     int appId = Integer.parseInt(shortcut.getExtra("app_id"));
                     String gameInstallPath = SteamBridge.getAppDirPath(appId);
                     File gameDir = new File(gameInstallPath);
+                    String language = container.getExtra("containerLanguage", "english");
+                    if (language == null || language.isEmpty()) language = "english";
+                    boolean isOfflineMode = container.isSteamOfflineMode();
+                    boolean forceDlc = container.isForceDlc();
+                    boolean useSteamInput = "true".equals(container.getExtra("useSteamInput", "false"));
+
+                    // Get encrypted app ticket once for all setup
+                    String ticketBase64 = null;
+                    try {
+                        ticketBase64 = SteamBridge.getEncryptedAppTicketBase64(appId);
+                    } catch (Exception e) {
+                        Log.w("XServerDisplayActivity", "Failed to get encrypted app ticket", e);
+                    }
 
                     if (gameDir.exists()) {
                         if (container.isUseLegacyDRM()) {
-                            // Legacy DRM mode: replace steam_api.dll with steampipe stubs
-                            // and set up steam_settings next to each DLL for Goldberg
-                            replaceSteamApiDlls(gameDir);
-                            setupSteamSettings(gameDir, appId);
-                            Log.d("XServerDisplayActivity", "Legacy DRM Steam setup complete for appId=" + appId);
+                            // ── Legacy DRM (Goldberg/steampipe stubs) ─────────────────────────
+                            // Guard with STEAM_DLL_REPLACED marker so we never double-replace
+                            if (!MarkerUtils.INSTANCE.hasMarker(gameInstallPath, Marker.STEAM_DLL_REPLACED)) {
+                                MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_DLL_RESTORED);
+                                MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_COLDCLIENT_USED);
+
+                                // Replace steam_api*.dll with steampipe stubs
+                                replaceSteamApiDlls(gameDir, gameInstallPath, language, isOfflineMode, forceDlc, useSteamInput, ticketBase64);
+
+                                // FIX #6: Restore .unpacked.exe if present (Steamless leftovers)
+                                SteamUtils.restoreUnpackedExecutable(this, appId);
+
+                                // FIX #4: Restore original steamclient*.dll (undo any prior ColdClient injection)
+                                SteamUtils.restoreSteamclientFiles(this, appId);
+
+                                // FIX #8: Generate achievements.json and save-location symlinks
+                                SteamUtils.enrichSteamSettings(this, appId,
+                                        new File(gameInstallPath, "steam_settings"));
+
+                                MarkerUtils.INSTANCE.addMarker(gameInstallPath, Marker.STEAM_DLL_REPLACED);
+                                Log.d("XServerDisplayActivity", "Legacy DRM Steam setup complete for appId=" + appId);
+                            } else {
+                                // DLLs already replaced; still refresh steam_settings in case ticket changed
+                                setupSteamSettingsForAllDirs(gameDir, appId, language, isOfflineMode, forceDlc, useSteamInput, ticketBase64);
+                                // FIX #8: Refresh achievements/save locations too
+                                SteamUtils.enrichSteamSettings(this, appId,
+                                        new File(gameInstallPath, "steam_settings"));
+                                Log.d("XServerDisplayActivity", "Legacy DRM: DLLs already replaced, refreshed steam_settings for appId=" + appId);
+                            }
                         } else {
-                            // ColdClientLoader mode (default, online play):
-                            // 1. MUST RESTORE the game's actual DLLs if they were previously replaced by TCP stubs
+                            // ── ColdClientLoader mode (default, online play) ──────────────────
+                            // FIX #9: Skip full re-setup if ColdClient was already configured and
+                            // the loader DLL is still in place.
+                            File steamclientLoaderDll = new File(container.getRootDir(),
+                                    ".wine/drive_c/Program Files (x86)/Steam/steamclient_loader_x64.dll");
+                            boolean coldClientAlreadyDone =
+                                    MarkerUtils.INSTANCE.hasMarker(gameInstallPath, Marker.STEAM_COLDCLIENT_USED)
+                                    && steamclientLoaderDll.exists();
+
+                            if (!coldClientAlreadyDone) {
+                                MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_DLL_REPLACED);
+                                MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_DLL_RESTORED);
+                                // FIX #3: Backup steamclient DLLs before any extraction/modification
+                                SteamUtils.backupSteamclientFiles(this, appId);
+                            }
+
+                            // 1. Restore the game's actual steam_api DLLs if previously replaced by stubs
                             restoreSteamApiDlls(gameDir);
 
+                            // FIX #5: Restore .original.exe if present (Steamless backup)
+                            SteamUtils.restoreOriginalExecutable(this, appId);
+
                             // 2. Write steam_settings/ next to steamclient.dll in the Steam directory
-                            // The Goldberg steamclient DLLs read from this location
                             File steamDir = new File(container.getRootDir(), ".wine/drive_c/Program Files (x86)/Steam");
                             steamDir.mkdirs();
-                            setupSteamSettingsForColdClient(steamDir, appId);
+                            SteamUtils.writeCompleteSettingsDir(steamDir, appId, language, isOfflineMode, forceDlc, useSteamInput, ticketBase64);
 
-                            // 3. ALSO set up steam_settings next to the game's steam_api DLLs
-                            // Some games load steam_api.dll directly and need settings there too
-                            setupSteamSettings(gameDir, appId);
+                            // 3. Also write steam_settings next to any steam_api DLLs in the game dir
+                            setupSteamSettingsForAllDirs(gameDir, appId, language, isOfflineMode, forceDlc, useSteamInput, ticketBase64);
 
-                            // 4. Generate steam_interfaces.txt from original DLLs for ColdClient mode too
+                            // 4. Generate steam_interfaces.txt from original DLLs for ColdClient
                             generateSteamInterfacesForGame(gameDir);
 
                             // 5. Write ColdClientLoader.ini with game exe path
@@ -1559,9 +1624,19 @@ public class XServerDisplayActivity extends AppCompatActivity {
                             } else {
                                 Log.w("XServerDisplayActivity", "Could not find game exe for ColdClientLoader, appId=" + appId);
                             }
+
+                            // FIX #9: Mark ColdClient setup complete for this game
+                            if (!coldClientAlreadyDone) {
+                                MarkerUtils.INSTANCE.addMarker(gameInstallPath, Marker.STEAM_COLDCLIENT_USED);
+                            }
                         }
+
                         // Common setup for both modes
                         setupSteamEnvironment(appId, gameDir);
+
+                        // Sync achievements from Goldberg back to Steam (best-effort)
+                        SteamUtils.syncGoldbergAchievementsAndStats(this, appId);
+
                         Log.d("XServerDisplayActivity", "Full Steam setup complete for appId=" + appId);
                     }
                 } catch (Exception e) {
@@ -2654,11 +2729,7 @@ public class XServerDisplayActivity extends AppCompatActivity {
                     // The ColdClientLoader.ini specifies the actual game exe path
                     File nativeDir = com.winlator.cmod.core.WineUtils.getNativePath(imageFs, "C:\\Program Files (x86)\\Steam");
                     if (nativeDir != null && nativeDir.exists()) launcherComponent.setWorkingDir(nativeDir);
-                    if (wineInfo != null && wineInfo.isArm64EC()) {
-                        args = "\"C:\\Program Files (x86)\\Steam\\steamclient_loader_x64.exe\"";
-                    } else {
-                        args = "/dir \"C:\\Program Files (x86)\\Steam\" \"steamclient_loader_x64.exe\"";
-                    }
+                    args = "/dir \"C:\\Program Files (x86)\\Steam\" \"steamclient_loader_x64.exe\"";
                     Log.d("XServerDisplayActivity", "ColdClient launch via steamclient_loader_x64.exe for appId=" + appId);
                 } else {
                     String gameExeWinPath = findGameExeWinPath(appId, new File(SteamBridge.getAppDirPath(appId)));
@@ -2976,6 +3047,10 @@ public class XServerDisplayActivity extends AppCompatActivity {
 
         String exeCommandLine = container.getExecArgs() != null ? container.getExecArgs() : "";
 
+        String injectionSection = container.isUnpackFiles()
+                ? "[Injection]\nIgnoreLoaderArchDifference=1\nDllsToInjectFolder=extra_dlls\n"
+                : "[Injection]\nIgnoreLoaderArchDifference=1\n";
+
         String iniContent = "[SteamClient]\n" +
                 "\n" +
                 "Exe=" + exePath + "\n" +
@@ -2987,96 +3062,10 @@ public class XServerDisplayActivity extends AppCompatActivity {
                 "SteamClientDll=steamclient.dll\n" +
                 "SteamClient64Dll=steamclient64.dll\n" +
                 "\n" +
-                "[Injection]\n" +
-                "IgnoreLoaderArchDifference=1\n";
+                injectionSection;
 
         FileUtils.writeString(iniFile, iniContent);
         Log.d("XServerDisplayActivity", "Wrote ColdClientLoader.ini: Exe=" + exePath + " AppId=" + appId);
-    }
-    
-    /**
-     * Sets up steam_settings/ next to steamclient.dll in the Steam directory.
-     * This is for the ColdClientLoader approach where Goldberg steamclient DLLs
-     * read auth config from this location, NOT from next to the game's steam_api.dll.
-     */
-    private void setupSteamSettingsForColdClient(File steamDir, int appId) {
-        // Get Steam user info from PluviaPreferences
-        android.content.SharedPreferences prefs = getSharedPreferences("PluviaPreferences", MODE_PRIVATE);
-        String accountName = prefs.getString("user_name", "Player");
-        long steamId64Long = prefs.getLong("steam_user_steam_id_64", 0L);
-        String accountSteamId = steamId64Long > 0 ? String.valueOf(steamId64Long) : "76561198000000000";
-        long accountId = steamId64Long > 0 ? (steamId64Long & 0xFFFFFFFFL) : 0L;
-        String language = container.getExtra("containerLanguage", "english");
-        if (language == null || language.isEmpty()) language = "english";
-
-        // Get encrypted app ticket for online auth
-        String ticketBase64 = null;
-        try {
-            ticketBase64 = SteamBridge.getEncryptedAppTicketBase64(appId);
-            if (ticketBase64 != null) {
-                Log.d("XServerDisplayActivity", "Got encrypted app ticket for ColdClient appId=" + appId);
-            } else {
-                Log.w("XServerDisplayActivity", "No encrypted app ticket for ColdClient appId=" + appId);
-            }
-        } catch (Exception e) {
-            Log.w("XServerDisplayActivity", "Failed to get encrypted app ticket for ColdClient", e);
-        }
-
-        // Create steam_settings directory next to steamclient.dll
-        File settingsDir = new File(steamDir, "steam_settings");
-        settingsDir.mkdirs();
-
-        // steam_appid.txt in both locations
-        FileUtils.writeString(new File(settingsDir, "steam_appid.txt"), String.valueOf(appId));
-        FileUtils.writeString(new File(steamDir, "steam_appid.txt"), String.valueOf(appId));
-
-        // configs.user.ini - account info + language + ticket
-        StringBuilder userIni = new StringBuilder();
-        userIni.append("[user::general]\n");
-        userIni.append("account_name=").append(accountName).append("\n");
-        userIni.append("account_steamid=").append(accountSteamId).append("\n");
-        userIni.append("language=").append(language).append("\n");
-        if (ticketBase64 != null && !ticketBase64.isEmpty()) {
-            userIni.append("ticket=").append(ticketBase64).append("\n");
-        }
-        userIni.append("\n[user::saves]\n");
-        userIni.append("local_save_path=C:\\Program Files (x86)\\Steam\\userdata\\").append(accountId).append("\n");
-
-        FileUtils.writeString(new File(settingsDir, "configs.user.ini"), userIni.toString());
-
-        // configs.main.ini - connectivity and overlay
-        boolean isOfflineMode = "true".equals(container.getExtra("steamOfflineMode", "false"));
-        StringBuilder mainIni = new StringBuilder();
-        mainIni.append("[main::connectivity]\n");
-        mainIni.append("disable_lan_only=").append(isOfflineMode ? "0" : "1").append("\n");
-        if (isOfflineMode) {
-            mainIni.append("offline=1\n");
-        }
-        mainIni.append("[main::general]\n");
-        mainIni.append("enable_overlay=0\n");
-        FileUtils.writeString(new File(settingsDir, "configs.main.ini"), mainIni.toString());
-
-        // configs.app.ini - DLC settings and cloud saves
-        StringBuilder appIni = new StringBuilder();
-        appIni.append("[app::dlcs]\n");
-        appIni.append("unlock_all=1\n\n");
-        appIni.append("[app::cloud_save::general]\n");
-        appIni.append("create_default_dir=1\n");
-        appIni.append("create_specific_dirs=1\n");
-        FileUtils.writeString(new File(settingsDir, "configs.app.ini"), appIni.toString());
-
-        // supported_languages.txt
-        String supportedLanguages = "arabic\nbulgarian\nschinese\ntchinese\nczech\ndanish\ndutch\n" +
-                "english\nfinnish\nfrench\ngerman\ngreek\nhungarian\nitalian\njapanese\nkoreana\n" +
-                "norwegian\npolish\nportuguese\nbrazilian\nromanian\nrussian\nspanish\nlatam\n" +
-                "swedish\nthai\nturkish\nukrainian\nvietnamese\n";
-        FileUtils.writeString(new File(settingsDir, "supported_languages.txt"), supportedLanguages);
-
-        // Write steam_appid.txt at Steam root level
-        FileUtils.writeString(new File(steamDir, "steam_appid.txt"), String.valueOf(appId));
-
-        Log.d("XServerDisplayActivity", "Created ColdClient steam_settings in " + steamDir.getAbsolutePath() +
-                " (user=" + accountName + ", id=" + accountSteamId + ", ticket=" + (ticketBase64 != null ? "yes" : "no") + ")");
     }
     
     /**
@@ -3148,54 +3137,129 @@ public class XServerDisplayActivity extends AppCompatActivity {
     }
 
     /**
-     * Replaces all steam_api.dll and steam_api64.dll in the game directory
-     * with our steampipe versions that communicate with the SteamPipeServer.
-     * Backs up originals with .original suffix.
+     * Replaces all steam_api.dll / steam_api64.dll in the game directory tree with
+     * steampipe stubs. Generates steam_interfaces.txt BEFORE replacing (from the original),
+     * backs up originals as .orig (matching GameNative's convention), writes orig_dll_path.txt,
+     * and calls writeCompleteSettingsDir next to each DLL found.
      */
-    private void replaceSteamApiDlls(File gameDir) {
+    private void replaceSteamApiDlls(File gameDir, String appDirPath, String language,
+            boolean isOffline, boolean forceDlc, boolean useSteamInput, String ticketBase64) {
         if (gameDir == null || !gameDir.exists()) return;
-        
-        File[] files = gameDir.listFiles();
+
+        java.util.List<String> backupPaths = new java.util.ArrayList<>();
+        replaceSteamApiDllsRecursive(gameDir, appDirPath, language, isOffline, forceDlc,
+                useSteamInput, ticketBase64, backupPaths);
+
+        // Write orig_dll_path.txt listing all .orig backup paths (matches GameNative)
+        if (!backupPaths.isEmpty()) {
+            try {
+                java.util.Collections.sort(backupPaths);
+                File origPathFile = new File(appDirPath, "orig_dll_path.txt");
+                FileUtils.writeString(origPathFile, android.text.TextUtils.join(System.lineSeparator(), backupPaths));
+                Log.d("XServerDisplayActivity", "Wrote " + backupPaths.size() + " DLL backup paths to orig_dll_path.txt");
+            } catch (Exception e) {
+                Log.w("XServerDisplayActivity", "Failed to write orig_dll_path.txt", e);
+            }
+        }
+    }
+
+    private void replaceSteamApiDllsRecursive(File dir, String appDirPath, String language,
+            boolean isOffline, boolean forceDlc, boolean useSteamInput, String ticketBase64,
+            java.util.List<String> backupPaths) {
+        if (dir == null || !dir.exists()) return;
+
+        File[] files = dir.listFiles();
         if (files == null) return;
-        
+
+        boolean hasSteamDll = false;
         for (File file : files) {
-            if (file.isDirectory()) {
-                replaceSteamApiDlls(file); // Recurse into subdirectories
-            } else {
+            if (file.isDirectory()) continue;
+            String name = file.getName().toLowerCase();
+            if (!name.equals("steam_api.dll") && !name.equals("steam_api64.dll")) continue;
+
+            hasSteamDll = true;
+            String assetName = name.equals("steam_api64.dll")
+                    ? "steampipe/steam_api64.dll"
+                    : "steampipe/steam_api.dll";
+
+            try {
+                // Generate steam_interfaces.txt BEFORE replacing (scans the original DLL)
+                generateSteamInterfacesFromDll(dir, file);
+
+                // Backup as .orig (GameNative convention) if not already done
+                File backup = new File(file.getParent(), file.getName() + ".orig");
+                if (!backup.exists()) {
+                    FileUtils.copy(file, backup);
+                    Log.d("XServerDisplayActivity", "Backed up original: " + file.getName() + " as .orig");
+                }
+                // Record relative backup path for orig_dll_path.txt
+                String relPath = backup.getAbsolutePath();
+                if (relPath.startsWith(appDirPath)) {
+                    relPath = relPath.substring(appDirPath.length());
+                    if (relPath.startsWith("/")) relPath = relPath.substring(1);
+                }
+                backupPaths.add(relPath);
+
+                // Replace with steampipe version
+                file.delete();
+                file.createNewFile();
+                try (InputStream is = getAssets().open(assetName);
+                     java.io.FileOutputStream fos = new java.io.FileOutputStream(file)) {
+                    byte[] buf = new byte[8192];
+                    int len;
+                    while ((len = is.read(buf)) >= 0) fos.write(buf, 0, len);
+                }
+                Log.d("XServerDisplayActivity", "Replaced " + file.getName() + " at " + file.getAbsolutePath());
+            } catch (Exception e) {
+                Log.e("XServerDisplayActivity", "Failed to replace " + file.getName(), e);
+            }
+        }
+
+        // Write complete steam_settings next to this dir if it contained a steam_api DLL
+        if (hasSteamDll) {
+            SteamUtils.writeCompleteSettingsDir(dir,
+                    Integer.parseInt(shortcut.getExtra("app_id")),
+                    language, isOffline, forceDlc, useSteamInput, ticketBase64);
+        }
+
+        // Recurse into subdirectories (skip steam_settings to avoid infinite recursion)
+        for (File file : files) {
+            if (file.isDirectory() && !file.getName().equals("steam_settings")) {
+                replaceSteamApiDllsRecursive(file, appDirPath, language, isOffline, forceDlc,
+                        useSteamInput, ticketBase64, backupPaths);
+            }
+        }
+    }
+
+    /**
+     * Walks the game directory and calls writeCompleteSettingsDir next to every directory
+     * that contains a steam_api.dll or steam_api64.dll.
+     * Used in ColdClient mode where we don't replace DLLs but still need settings.
+     */
+    private void setupSteamSettingsForAllDirs(File dir, int appId, String language,
+            boolean isOffline, boolean forceDlc, boolean useSteamInput, String ticketBase64) {
+        if (dir == null || !dir.exists()) return;
+
+        File[] files = dir.listFiles();
+        if (files == null) return;
+
+        boolean hasSteamDll = false;
+        for (File file : files) {
+            if (!file.isDirectory()) {
                 String name = file.getName().toLowerCase();
-                String assetName = null;
-                
-                if (name.equals("steam_api.dll")) {
-                    assetName = "steampipe/steam_api.dll";
-                } else if (name.equals("steam_api64.dll")) {
-                    assetName = "steampipe/steam_api64.dll";
+                if (name.equals("steam_api.dll") || name.equals("steam_api64.dll")) {
+                    hasSteamDll = true;
                 }
-                
-                if (assetName != null) {
-                    try {
-                        // Backup original if not already backed up
-                        File backup = new File(file.getParent(), file.getName() + ".original");
-                        if (!backup.exists()) {
-                            FileUtils.copy(file, backup);
-                            Log.d("XServerDisplayActivity", "Backed up original: " + file.getName());
-                        }
-                        
-                        // Replace with steampipe version
-                        file.delete();
-                        file.createNewFile();
-                        try (java.io.InputStream is = getAssets().open(assetName);
-                             java.io.FileOutputStream fos = new java.io.FileOutputStream(file)) {
-                            byte[] buf = new byte[8192];
-                            int len;
-                            while ((len = is.read(buf)) >= 0) {
-                                fos.write(buf, 0, len);
-                            }
-                        }
-                        Log.d("XServerDisplayActivity", "Replaced " + file.getName() + " with steampipe version at " + file.getAbsolutePath());
-                    } catch (Exception e) {
-                        Log.e("XServerDisplayActivity", "Failed to replace " + file.getName(), e);
-                    }
-                }
+            }
+        }
+
+        if (hasSteamDll) {
+            SteamUtils.writeCompleteSettingsDir(dir, appId, language, isOffline, forceDlc, useSteamInput, ticketBase64);
+        }
+
+        for (File file : files) {
+            if (file.isDirectory() && !file.getName().equals("steam_settings")) {
+                setupSteamSettingsForAllDirs(file, appId, language, isOffline, forceDlc, useSteamInput, ticketBase64);
             }
         }
     }
@@ -3204,27 +3268,31 @@ public class XServerDisplayActivity extends AppCompatActivity {
      * Restores the original steam_api.dll and steam_api64.dll in the game directory.
      * Required if a game was previously launched in Legacy DRM mode (which swaps them with stubs),
      * but is now being launched in ColdClientLoader mode (which requires the real DLLs).
+     * Backups are stored as .orig (e.g. steam_api64.dll.orig) by replaceSteamApiDllsRecursive.
      */
     private void restoreSteamApiDlls(File gameDir) {
         if (gameDir == null || !gameDir.exists()) return;
-        
+
         File[] files = gameDir.listFiles();
         if (files == null) return;
-        
+
         for (File file : files) {
             if (file.isDirectory()) {
-                restoreSteamApiDlls(file);
+                if (!file.getName().equals("steam_settings")) {
+                    restoreSteamApiDlls(file);
+                }
             } else {
                 String name = file.getName().toLowerCase();
-                if (name.equals("steam_api.dll.original") || name.equals("steam_api64.dll.original")) {
+                // Backups are written as .orig (GameNative convention)
+                if (name.equals("steam_api.dll.orig") || name.equals("steam_api64.dll.orig")) {
                     try {
-                        String originalName = file.getName().substring(0, file.getName().length() - ".original".length());
+                        String originalName = file.getName().substring(0, file.getName().length() - ".orig".length());
                         File target = new File(file.getParent(), originalName);
-                        
+
                         if (target.exists()) target.delete();
                         FileUtils.copy(file, target);
-                        
-                        Log.d("XServerDisplayActivity", "Restored original " + originalName + " from backup");
+
+                        Log.d("XServerDisplayActivity", "Restored original " + originalName + " from .orig backup");
                     } catch (Exception e) {
                         Log.e("XServerDisplayActivity", "Failed to restore " + file.getName(), e);
                     }
@@ -3239,128 +3307,20 @@ public class XServerDisplayActivity extends AppCompatActivity {
     }
 
     /**
-     * Creates the steam_settings directory next to each steam_api DLL with config files.
-     * This is what the Goldberg/steampipe emulator reads for auth, language, connectivity, etc.
-     * Matches GameNative's ensureSteamSettings approach.
-     */
-    private void setupSteamSettings(File gameDir, int appId) {
-        if (gameDir == null || !gameDir.exists()) return;
-        
-        // Get Steam user info from PluviaPreferences (set during Steam login via PrefManager)
-        android.content.SharedPreferences prefs = getSharedPreferences("PluviaPreferences", MODE_PRIVATE);
-        String accountName = prefs.getString("user_name", "Player");
-        long steamId64Long = prefs.getLong("steam_user_steam_id_64", 0L);
-        String accountSteamId = steamId64Long > 0 ? String.valueOf(steamId64Long) : "76561198000000000";
-        String language = container.getExtra("containerLanguage", "english");
-        if (language == null || language.isEmpty()) language = "english";
-        
-        // Get encrypted app ticket for online auth (requires active Steam login)
-        String ticketBase64 = null;
-        try {
-            ticketBase64 = SteamBridge.getEncryptedAppTicketBase64(appId);
-            if (ticketBase64 != null) {
-                Log.d("XServerDisplayActivity", "Got encrypted app ticket for appId=" + appId + " (length=" + ticketBase64.length() + ")");
-            } else {
-                Log.w("XServerDisplayActivity", "No encrypted app ticket available for appId=" + appId + " (Steam not logged in?)");
-            }
-        } catch (Exception e) {
-            Log.w("XServerDisplayActivity", "Failed to get encrypted app ticket", e);
-        }
-        
-        // Find all directories containing steam_api DLLs and set up settings there
-        setupSteamSettingsInDir(gameDir, appId, accountName, accountSteamId, language, ticketBase64);
-    }
-    
-    private void setupSteamSettingsInDir(File dir, int appId, String accountName, String accountSteamId, String language, String ticketBase64) {
-        File[] files = dir.listFiles();
-        if (files == null) return;
-        
-        boolean hasSteamDll = false;
-        for (File f : files) {
-            if (f.isFile()) {
-                String name = f.getName().toLowerCase();
-                if (name.equals("steam_api.dll") || name.equals("steam_api64.dll")) {
-                    hasSteamDll = true;
-                    // Generate steam_interfaces.txt from the backed-up original DLL
-                    generateSteamInterfacesFile(dir, f.getName());
-                }
-            }
-        }
-        
-        if (hasSteamDll) {
-            // Write steam_appid.txt in this directory
-            FileUtils.writeString(new File(dir, "steam_appid.txt"), String.valueOf(appId));
-
-            // Create steam_settings directory
-            File settingsDir = new File(dir, "steam_settings");
-            settingsDir.mkdirs();
-
-            // steam_appid.txt in settings dir too
-            FileUtils.writeString(new File(settingsDir, "steam_appid.txt"), String.valueOf(appId));
-
-            // configs.user.ini - account info + language + ticket
-            StringBuilder userIni = new StringBuilder();
-            userIni.append("[user::general]\n");
-            userIni.append("account_name=").append(accountName).append("\n");
-            userIni.append("account_steamid=").append(accountSteamId).append("\n");
-            userIni.append("language=").append(language).append("\n");
-            if (ticketBase64 != null && !ticketBase64.isEmpty()) {
-                userIni.append("ticket=").append(ticketBase64).append("\n");
-            }
-            FileUtils.writeString(new File(settingsDir, "configs.user.ini"), userIni.toString());
-
-            // configs.main.ini - connectivity and overlay
-            boolean isOfflineMode = "true".equals(container.getExtra("steamOfflineMode", "false"));
-            StringBuilder mainIniBuilder = new StringBuilder();
-            mainIniBuilder.append("[main::connectivity]\n");
-            mainIniBuilder.append("disable_lan_only=").append(isOfflineMode ? "0" : "1").append("\n");
-            if (isOfflineMode) {
-                mainIniBuilder.append("offline=1\n");
-            }
-            mainIniBuilder.append("[main::general]\n");
-            mainIniBuilder.append("enable_overlay=0\n");
-            FileUtils.writeString(new File(settingsDir, "configs.main.ini"), mainIniBuilder.toString());
-
-            // configs.app.ini - DLC settings and cloud saves
-            StringBuilder appIni = new StringBuilder();
-            appIni.append("[app::dlcs]\n");
-            appIni.append("unlock_all=1\n\n");
-            appIni.append("[app::cloud_save::general]\n");
-            appIni.append("create_default_dir=1\n");
-            appIni.append("create_specific_dirs=1\n");
-            FileUtils.writeString(new File(settingsDir, "configs.app.ini"), appIni.toString());
-
-            // supported_languages.txt
-            String supportedLanguages = "arabic\nbulgarian\nschinese\ntchinese\nczech\ndanish\ndutch\n" +
-                    "english\nfinnish\nfrench\ngerman\ngreek\nhungarian\nitalian\njapanese\nkoreana\n" +
-                    "norwegian\npolish\nportuguese\nbrazilian\nromanian\nrussian\nspanish\nlatam\n" +
-                    "swedish\nthai\nturkish\nukrainian\nvietnamese\n";
-            FileUtils.writeString(new File(settingsDir, "supported_languages.txt"), supportedLanguages);
-
-            Log.d("XServerDisplayActivity", "Created steam_settings in " + dir.getAbsolutePath() +
-                    " (user=" + accountName + ", id=" + accountSteamId + ", lang=" + language +
-                    ", ticket=" + (ticketBase64 != null ? "yes" : "no") + ")");
-        }
-        
-        // Recurse into subdirectories
-        for (File f : files) {
-            if (f.isDirectory() && !f.getName().equals("steam_settings")) {
-                setupSteamSettingsInDir(f, appId, accountName, accountSteamId, language, ticketBase64);
-            }
-        }
-    }
-    
-    /**
      * Generates steam_interfaces.txt by scanning the backed-up original DLL for
      * Steam interface version strings (e.g., SteamUser023, SteamApps008).
-     * Matches GameNative's generateInterfacesFile approach.
+     * Checks .orig backup first (GameNative convention), then falls back to the DLL itself.
      */
     private void generateSteamInterfacesFile(File dir, String dllName) {
         File interfacesFile = new File(dir, "steam_interfaces.txt");
         if (interfacesFile.exists()) return;
 
-        // Try .original backup first (has the real interfaces), then the DLL itself
-        File dllToScan = new File(dir, dllName + ".original");
+        // Prefer the .orig backup (original DLL before steampipe replacement)
+        File dllToScan = new File(dir, dllName + ".orig");
+        if (!dllToScan.exists()) {
+            // Fall back to .original (legacy naming from older WinNative builds)
+            dllToScan = new File(dir, dllName + ".original");
+        }
         if (!dllToScan.exists()) {
             dllToScan = new File(dir, dllName);
         }
@@ -3423,25 +3383,13 @@ public class XServerDisplayActivity extends AppCompatActivity {
                 }
             }
 
-            // Create ACF manifest so Steam sees the game as installed
-            String acfContent = "\"AppState\"\n" +
-                    "{\n" +
-                    "\t\"appid\"\t\t\"" + appId + "\"\n" +
-                    "\t\"Universe\"\t\t\"1\"\n" +
-                    "\t\"name\"\t\t\"" + gameName + "\"\n" +
-                    "\t\"StateFlags\"\t\t\"4\"\n" +
-                    "\t\"installdir\"\t\t\"" + gameName + "\"\n" +
-                    "\t\"LastUpdated\"\t\t\"" + (System.currentTimeMillis() / 1000) + "\"\n" +
-                    "\t\"SizeOnDisk\"\t\t\"0\"\n" +
-                    "\t\"BytesToDownload\"\t\t\"0\"\n" +
-                    "\t\"BytesDownloaded\"\t\t\"0\"\n" +
-                    "\t\"AutoUpdateBehavior\"\t\t\"0\"\n" +
-                    "\t\"AllowOtherDownloadsWhileRunning\"\t\t\"0\"\n" +
-                    "\t\"ScheduledAutoUpdate\"\t\t\"0\"\n" +
-                    "}\n";
-            FileUtils.writeString(new File(steamappsDir, "appmanifest_" + appId + ".acf"), acfContent);
+            // FIX #7: Create full ACF manifest via SteamUtils.createAppManifest which includes
+            // InstalledDepots, buildId, SizeOnDisk, UserConfig/language — matching GameNative.
+            // Falls back gracefully if SteamService has no appInfo for this game.
+            SteamUtils.createAppManifest(this, appId);
 
-            // Create Steamworks Common Redistributables ACF
+            // Ensure the Steamworks Common Redistributables ACF always exists as a fallback
+            // (createAppManifest only creates it when there are shared depots in the manifest).
             File steamworksAcf = new File(steamappsDir, "appmanifest_228980.acf");
             if (!steamworksAcf.exists()) {
                 String steamworksAcfContent = "\"AppState\"\n" +
@@ -3458,45 +3406,24 @@ public class XServerDisplayActivity extends AppCompatActivity {
                 FileUtils.writeString(steamworksAcf, steamworksAcfContent);
             }
 
-            // Set up Wine registry for Steam paths
-            android.content.SharedPreferences prefs = getSharedPreferences("PluviaPreferences", MODE_PRIVATE);
-            String accountName = prefs.getString("user_name", "Player");
-            long steamIdLong = prefs.getLong("steam_user_steam_id_64", 0L);
-            String steamId64 = steamIdLong > 0 ? String.valueOf(steamIdLong) : "76561198000000000";
-
-            File userReg = new File(winePrefix, ".wine/user.reg");
-            if (userReg.exists()) {
-                try (WineRegistryEditor reg = new WineRegistryEditor(userReg)) {
-                    String steamRoot = "C:\\Program Files (x86)\\Steam";
-                    String steamExe = steamRoot + "\\steam.exe";
-                    reg.setStringValue("Software\\Valve\\Steam", "AutoLoginUser", accountName);
-                    reg.setStringValue("Software\\Valve\\Steam", "SteamExe", steamExe);
-                    reg.setStringValue("Software\\Valve\\Steam", "SteamPath", steamRoot);
-                    reg.setStringValue("Software\\Valve\\Steam", "InstallPath", steamRoot);
-                    Log.d("XServerDisplayActivity", "Set Steam registry entries");
-                } catch (Exception e) {
-                    Log.w("XServerDisplayActivity", "Failed to set Steam registry entries", e);
-                }
+            // Write loginusers.vdf with full OAuth tokens and set Wine registry for Steam paths.
+            // autoLoginUserChanges uses SteamService for proper token format (matching GameNative).
+            try {
+                SteamUtils.autoLoginUserChanges(imageFs);
+                Log.d("XServerDisplayActivity", "autoLoginUserChanges complete");
+            } catch (Exception e) {
+                Log.w("XServerDisplayActivity", "autoLoginUserChanges failed, falling back", e);
             }
 
             // Skip first-time redistributable setup by marking them installed in system.reg
             skipFirstTimeSteamSetup(winePrefix);
 
-            // Create config/loginusers.vdf with full auth fields
-            File configDir = new File(steamDir, "config");
-            configDir.mkdirs();
-            long epoch = System.currentTimeMillis() / 1000;
-            String loginVdf = "\"users\"\n{\n\t\"" + steamId64 + "\"\n\t{\n" +
-                    "\t\t\"AccountName\"\t\t\"" + accountName + "\"\n" +
-                    "\t\t\"PersonaName\"\t\t\"" + accountName + "\"\n" +
-                    "\t\t\"RememberPassword\"\t\t\"1\"\n" +
-                    "\t\t\"WantsOfflineMode\"\t\t\"0\"\n" +
-                    "\t\t\"SkipOfflineModeWarning\"\t\t\"0\"\n" +
-                    "\t\t\"AllowAutoLogin\"\t\t\"1\"\n" +
-                    "\t\t\"MostRecent\"\t\t\"1\"\n" +
-                    "\t\t\"Timestamp\"\t\t\"" + epoch + "\"\n" +
-                    "\t}\n}\n";
-            FileUtils.writeString(new File(configDir, "loginusers.vdf"), loginVdf);
+            // Derive account info for config.vdf and lightweight config (PrefManager mirrors the
+            // same SharedPreferences that autoLoginUserChanges already used above).
+            android.content.SharedPreferences prefs = getSharedPreferences("PluviaPreferences", MODE_PRIVATE);
+            String accountName = prefs.getString("user_name", "Player");
+            long steamIdLong = prefs.getLong("steam_user_steam_id_64", 0L);
+            String steamId64 = steamIdLong > 0 ? String.valueOf(steamIdLong) : "76561198000000000";
 
             // Set up config.vdf with encrypted ConnectCache token for Steam auto-login
             setupSteamConfigVdf(steamId64, accountName);

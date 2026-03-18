@@ -168,40 +168,48 @@ public abstract class ProcessHelper {
     public static String[] splitCommand(String command) {
         ArrayList<String> result = new ArrayList<>();
         boolean startedQuotes = false;
-        StringBuilder value = new StringBuilder();
+        String value = "";
         char currChar, nextChar;
         for (int i = 0, count = command.length(); i < count; i++) {
             currChar = command.charAt(i);
+            char quoteChar = '"';
 
             if (startedQuotes) {
-                if (currChar == '"') {
+                if (currChar == quoteChar) {
                     startedQuotes = false;
+                    if (!value.isEmpty()) {
+                        value += quoteChar;
+                        result.add(value);
+                        value = "";
+                    }
                 }
-                else value.append(currChar);
+                else value += currChar;
             }
-            else if (currChar == '"') {
+            else if (currChar == '"' || currChar == '\'') {
+                if (currChar == '\'') quoteChar = '\'';
                 startedQuotes = true;
+                value += quoteChar;
             }
             else {
                 nextChar = i < count-1 ? command.charAt(i+1) : '\0';
                 if (currChar == ' ' || (currChar == '\\' && nextChar == ' ')) {
                     if (currChar == '\\') {
-                        value.append(' ');
+                        value += ' ';
                         i++;
                     }
-                    else if (value.length() > 0) {
-                        result.add(value.toString());
-                        value.setLength(0);
+                    else if (!value.isEmpty()) {
+                        result.add(value);
+                        value = "";
                     }
                 }
                 else {
-                    value.append(currChar);
+                    value += currChar;
+                    if (i == count-1) {
+                        result.add(value);
+                        value = "";
+                    }
                 }
             }
-        }
-        
-        if (value.length() > 0) {
-            result.add(value.toString());
         }
 
         return result.toArray(new String[0]);

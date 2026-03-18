@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#define DBG(...) do { fprintf(stderr, "XINPUT_VIRTUAL: " __VA_ARGS__); fflush(stderr); } while(0)
 #ifndef ERROR_EMPTY
 #define ERROR_EMPTY 4306L
 #endif
@@ -175,7 +176,14 @@ static void normalize_path(char *dst, size_t dst_len, const char *src) {
 
 static BOOL build_slot_path(DWORD user_index, char *path, size_t path_len) {
     char base[MAX_PATH * 4];
-    DWORD rc = GetEnvironmentVariableA("EVSHIM_DATA_PATH", base, (DWORD)sizeof(base));
+    /* EVSHIM_WIN_PATH is a Wine-resolvable Windows path (e.g. Z:\tmp) set by the
+     * Android launcher. Fall back to EVSHIM_DATA_PATH for compatibility, but note
+     * that EVSHIM_DATA_PATH is an absolute Linux path that normalize_path will
+     * incorrectly prefix with Z:, causing resolution under the wrong root. */
+    DWORD rc = GetEnvironmentVariableA("EVSHIM_WIN_PATH", base, (DWORD)sizeof(base));
+    if (rc == 0) {
+        rc = GetEnvironmentVariableA("EVSHIM_DATA_PATH", base, (DWORD)sizeof(base));
+    }
     const char *suffix = user_index == 0 ? "\\gamepad.mem" : NULL;
     char normalized[MAX_PATH * 4];
 
@@ -218,28 +226,34 @@ static BOOL ensure_slot(DWORD user_index) {
     slot->last_retry_tick = now;
 
     if (!build_slot_path(user_index, path, sizeof(path))) {
+        DBG("P%lu: build_slot_path FAILED\n", (unsigned long)user_index);
         return FALSE;
     }
+    DBG("P%lu: trying path '%s'\n", (unsigned long)user_index, path);
 
     slot->file = CreateFileA(path, GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL, NULL);
     if (slot->file == INVALID_HANDLE_VALUE) {
+        DBG("P%lu: CreateFileA FAILED err=%lu\n", (unsigned long)user_index, GetLastError());
         slot->file = NULL;
         return FALSE;
     }
 
     slot->mapping = CreateFileMappingA(slot->file, NULL, PAGE_READWRITE, 0, sizeof(gamepad_io), NULL);
     if (!slot->mapping) {
+        DBG("P%lu: CreateFileMappingA FAILED err=%lu\n", (unsigned long)user_index, GetLastError());
         release_slot(slot);
         return FALSE;
     }
 
     slot->view = (volatile gamepad_io *)MapViewOfFile(slot->mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(gamepad_io));
     if (!slot->view) {
+        DBG("P%lu: MapViewOfFile FAILED err=%lu\n", (unsigned long)user_index, GetLastError());
         release_slot(slot);
         return FALSE;
     }
+    DBG("P%lu: slot mapped OK at %p\n", (unsigned long)user_index, (void*)slot->view);
 
     memcpy(slot->path, path, sizeof(slot->path));
     ZeroMemory(slot->last_packet, sizeof(slot->last_packet));
@@ -277,10 +291,14 @@ static WORD build_buttons(const volatile gamepad_io *raw) {
     return buttons;
 }
 
+static int g_fill_dbg_count = 0;
+
 static DWORD fill_state(DWORD user_index, XINPUT_STATE *state) {
     slot_state *slot;
-    BYTE snapshot[28];
-    volatile const gamepad_io *raw;
+    gamepad_io fresh;
+    const gamepad_io *raw;
+    DWORD bytes_read = 0;
+    LARGE_INTEGER zero_offset;
 
     if (!state || user_index >= XUSER_MAX_COUNT) {
         return ERROR_BAD_ARGUMENTS;
@@ -290,12 +308,41 @@ static DWORD fill_state(DWORD user_index, XINPUT_STATE *state) {
     }
 
     slot = &g_slots[user_index];
-    raw = slot->view;
 
-    memcpy(snapshot, (const void *)raw, sizeof(snapshot));
-    if (memcmp(snapshot, slot->last_packet, sizeof(snapshot)) != 0) {
-        memcpy(slot->last_packet, snapshot, sizeof(snapshot));
+    /* ReadFile to get fresh data on every poll.
+     * Wine's MapViewOfFile on ARM (Box64/FEXCore) has stale page cache issues
+     * where changes written by Android's MappedByteBuffer may not be visible
+     * for seconds. ReadFile forces a fresh read through Wine's I/O path.
+     * The overhead (~36 bytes per read) is negligible. */
+    zero_offset.QuadPart = 0;
+    SetFilePointerEx(slot->file, zero_offset, NULL, FILE_BEGIN);
+    if (!ReadFile(slot->file, &fresh, sizeof(gamepad_io), &bytes_read, NULL) ||
+        bytes_read < sizeof(gamepad_io)) {
+        /* Fallback to memory-mapped view if ReadFile fails */
+        if (slot->view) {
+            memcpy(&fresh, (const void *)slot->view, sizeof(gamepad_io));
+        } else {
+            ZeroMemory(state, sizeof(*state));
+            return ERROR_SUCCESS;
+        }
+    }
+    raw = &fresh;
+
+    if (memcmp(&fresh, slot->last_packet, sizeof(slot->last_packet)) != 0) {
+        memcpy(slot->last_packet, &fresh, sizeof(slot->last_packet));
         ++slot->packet_number;
+        DBG("P%lu STATE CHANGE: lx=%d ly=%d rx=%d ry=%d lt=%d rt=%d pkt=%lu\n",
+            (unsigned long)user_index,
+            (int)raw->lx, (int)raw->ly, (int)raw->rx, (int)raw->ry,
+            (int)raw->lt, (int)raw->rt,
+            (unsigned long)slot->packet_number);
+    }
+
+    /* Periodic log every 500 calls to show we're being polled */
+    if (++g_fill_dbg_count % 500 == 1) {
+        DBG("P%lu POLL #%d: lx=%d ly=%d rx=%d ry=%d\n",
+            (unsigned long)user_index, g_fill_dbg_count,
+            (int)raw->lx, (int)raw->ly, (int)raw->rx, (int)raw->ry);
     }
 
     ZeroMemory(state, sizeof(*state));
@@ -304,9 +351,9 @@ static DWORD fill_state(DWORD user_index, XINPUT_STATE *state) {
     state->Gamepad.bLeftTrigger = normalize_trigger(raw->lt);
     state->Gamepad.bRightTrigger = normalize_trigger(raw->rt);
     state->Gamepad.sThumbLX = raw->lx;
-    state->Gamepad.sThumbLY = raw->ly;
+    state->Gamepad.sThumbLY = (raw->ly <= -32767) ? 32767 : -raw->ly;  /* shared mem uses SDL convention (positive=down); XInput expects positive=up */
     state->Gamepad.sThumbRX = raw->rx;
-    state->Gamepad.sThumbRY = raw->ry;
+    state->Gamepad.sThumbRY = (raw->ry <= -32767) ? 32767 : -raw->ry;
     return ERROR_SUCCESS;
 }
 

@@ -37,8 +37,8 @@ public class Container {
     public static final String DEFAULT_GRAPHICSDRIVERCONFIG =
             "vulkanVersion=1.3" + ";version=" + ";blacklistedExtensions=" + ";maxDeviceMemory=0" + ";presentMode=mailbox" + ";syncFrame=0" + ";disablePresentWait=0" + ";resourceType=auto" + ";bcnEmulation=auto" + ";bcnEmulationType=compute" + ";bcnEmulationCache=0" + ";gpuName=Device";
     public static final String DEFAULT_DDRAWRAPPER = "none";
-    public static final String DEFAULT_WINCOMPONENTS = "direct3d=1,directsound=0,directmusic=0,directshow=0,directplay=0,xaudio=0,xinput_virtual=0,vcrun2010=1";
-    public static final String FALLBACK_WINCOMPONENTS = "direct3d=1,directsound=1,directmusic=1,directshow=1,directplay=1,xaudio=1,xinput_virtual=1,vcrun2010=1";
+    public static final String DEFAULT_WINCOMPONENTS = "direct3d=1,directsound=0,directmusic=0,directshow=0,directplay=0,xaudio=0,vcrun2010=1";
+    public static final String FALLBACK_WINCOMPONENTS = "direct3d=1,directsound=1,directmusic=1,directshow=1,directplay=1,xaudio=1,vcrun2010=1";
     public static final String DEFAULT_DRIVES = "F:"+Environment.getExternalStorageDirectory().getAbsolutePath()+"D:"+Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
     public static final byte STARTUP_SELECTION_NORMAL = 0;
     public static final byte STARTUP_SELECTION_ESSENTIAL = 1;
@@ -79,6 +79,16 @@ public class Container {
     private String execArgs = "";
     private boolean launchRealSteam;
     private boolean useLegacyDRM;
+    private String steamType = DefaultVersion.STEAM_TYPE;
+    private boolean allowSteamUpdates;
+    private boolean needsUnpacking = true;
+    private boolean forceDlc = false;
+    private boolean steamOfflineMode = false;
+    private boolean unpackFiles = true;
+
+    public static final String STEAM_TYPE_NORMAL = "normal";
+    public static final String STEAM_TYPE_LIGHT = "light";
+    public static final String STEAM_TYPE_ULTRALIGHT = "ultralight";
 
     private ContainerManager containerManager;
 
@@ -452,6 +462,12 @@ public class Container {
             data.put("controllerMapping", controllerMapping);
             data.put("launchRealSteam", launchRealSteam);
             data.put("useLegacyDRM", useLegacyDRM);
+            data.put("steamType", steamType);
+            data.put("allowSteamUpdates", allowSteamUpdates);
+            data.put("needsUnpacking", needsUnpacking);
+            data.put("forceDlc", forceDlc);
+            data.put("steamOfflineMode", steamOfflineMode);
+            data.put("unpackFiles", unpackFiles);
             if (!WineInfo.isMainWineVersion(wineVersion)) data.put("wineVersion", wineVersion);
             FileUtils.writeString(getConfigFile(), data.toString());
         }
@@ -570,6 +586,24 @@ public class Container {
                 case "useLegacyDRM" :
                     setUseLegacyDRM(data.getBoolean(key));
                     break;
+                case "steamType" :
+                    setSteamType(data.getString(key));
+                    break;
+                case "allowSteamUpdates" :
+                    setAllowSteamUpdates(data.getBoolean(key));
+                    break;
+                case "needsUnpacking" :
+                    setNeedsUnpacking(data.getBoolean(key));
+                    break;
+                case "forceDlc":
+                    setForceDlc(data.getBoolean(key));
+                    break;
+                case "steamOfflineMode":
+                    setSteamOfflineMode(data.getBoolean(key));
+                    break;
+                case "unpackFiles":
+                    setUnpackFiles(data.getBoolean(key));
+                    break;
             }
         }
     }
@@ -674,6 +708,64 @@ public class Container {
 
     public void setUseLegacyDRM(boolean useLegacyDRM) {
         this.useLegacyDRM = useLegacyDRM;
+    }
+
+    public String getSteamType() {
+        return steamType;
+    }
+
+    public void setSteamType(String steamType) {
+        String normalized = (steamType == null) ? "" : steamType.toLowerCase();
+        switch (normalized) {
+            case STEAM_TYPE_LIGHT:
+                this.steamType = STEAM_TYPE_LIGHT;
+                break;
+            case STEAM_TYPE_ULTRALIGHT:
+                this.steamType = STEAM_TYPE_ULTRALIGHT;
+                break;
+            default:
+                this.steamType = STEAM_TYPE_NORMAL;
+        }
+    }
+
+    public boolean isAllowSteamUpdates() {
+        return allowSteamUpdates;
+    }
+
+    public void setAllowSteamUpdates(boolean allowSteamUpdates) {
+        this.allowSteamUpdates = allowSteamUpdates;
+    }
+
+    public boolean isNeedsUnpacking() {
+        return needsUnpacking;
+    }
+
+    public void setNeedsUnpacking(boolean needsUnpacking) {
+        this.needsUnpacking = needsUnpacking;
+    }
+
+    public boolean isForceDlc() {
+        return forceDlc;
+    }
+
+    public void setForceDlc(boolean forceDlc) {
+        this.forceDlc = forceDlc;
+    }
+
+    public boolean isSteamOfflineMode() {
+        return steamOfflineMode;
+    }
+
+    public void setSteamOfflineMode(boolean steamOfflineMode) {
+        this.steamOfflineMode = steamOfflineMode;
+    }
+
+    public boolean isUnpackFiles() {
+        return unpackFiles;
+    }
+
+    public void setUnpackFiles(boolean unpackFiles) {
+        this.unpackFiles = unpackFiles;
     }
 
 }

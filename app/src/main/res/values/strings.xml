@@ -1406,6 +1406,7 @@ E.g. <b>META</b> for <i>META key</i>, \n
     
     <string name="use_sdl_api">Use SDL API</string>
     <string name="use_steam_input">Use Steam Input</string>
+    <string name="steam_offline_mode">Steam Offline Mode</string>
     <string name="enable_xinput_api">Enable XInput API</string>
     <string name="enable_directinput_api">Enable DirectInput API</string>
     <string name="disable_mouse_input">Disable Mouse Input</string>

@@ -759,6 +759,17 @@ class EpicManager @Inject constructor(
         }
     }
 
+    suspend fun getGameByCatalogId(catalogId: String): EpicGame? {
+        return withContext(Dispatchers.IO) {
+            try {
+                epicGameDao.getByCatalogId(catalogId)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to get Epic game by catalogId: $catalogId")
+                null
+            }
+        }
+    }
+
     suspend fun getDLCForTitle(appId: Int): List<EpicGame> {
         return withContext(Dispatchers.IO) {
             try {

@@ -21,10 +21,7 @@ import kotlin.concurrent.thread
  */
 object SteamClientManager {
     private const val TAG = "SteamClientManager"
-
-    private const val STEAM_DOWNLOAD_URL = "https://github.com/maxjivi05/Components/releases/download/Components/steam.tzst"
-    private const val STEAM_PRIMARY_CDN = "https://downloads.gamenative.app/steam.tzst"
-    private const val STEAM_FALLBACK_CDN = "https://pub-9fcd5294bd0d4b85a9d73615bf98f3b5.r2.dev/steam.tzst"
+    private const val COMPONENTS_BASE_URL = "https://github.com/maxjivi05/Components/releases/download/Components"
 
     interface DownloadProgressListener {
         fun onProgress(progress: Float)
@@ -38,16 +35,24 @@ object SteamClientManager {
     @JvmStatic
     fun isSteamDownloaded(context: Context): Boolean {
         val steamFile = File(context.filesDir, "steam.tzst")
-        val expFile = File(context.filesDir, "experimental-drm-20260116.tzst")
-        return steamFile.exists() && steamFile.length() > 0 && expFile.exists() && expFile.length() > 0
+        return steamFile.exists() && steamFile.length() > 0
     }
 
     @JvmStatic
     fun isSteamInstalled(context: Context): Boolean {
         val imageFs = ImageFs.find(context)
         val steamExe = File(imageFs.rootDir, "${ImageFs.WINEPREFIX}/drive_c/Program Files (x86)/Steam/steam.exe")
+        val steamClient = File(imageFs.rootDir, "${ImageFs.WINEPREFIX}/drive_c/Program Files (x86)/Steam/steamclient.dll")
+        val steamClient64 = File(imageFs.rootDir, "${ImageFs.WINEPREFIX}/drive_c/Program Files (x86)/Steam/steamclient64.dll")
+        return steamExe.exists() && steamClient.exists() && steamClient64.exists()
+    }
+
+    @JvmStatic
+    fun isColdClientInstalled(context: Context): Boolean {
+        val imageFs = ImageFs.find(context)
         val loaderExe = File(imageFs.rootDir, "${ImageFs.WINEPREFIX}/drive_c/Program Files (x86)/Steam/steamclient_loader_x64.exe")
-        return steamExe.exists() && loaderExe.exists()
+        val loaderDll = File(imageFs.rootDir, "${ImageFs.WINEPREFIX}/drive_c/Program Files (x86)/Steam/steamclient_loader_x64.dll")
+        return loaderExe.exists() && loaderExe.length() > 0 && loaderDll.exists() && loaderDll.length() > 0
     }
 
     @JvmStatic
@@ -58,7 +63,7 @@ object SteamClientManager {
             var success = false
             var error: String? = null
 
-            val urls = arrayOf(STEAM_DOWNLOAD_URL, STEAM_PRIMARY_CDN, STEAM_FALLBACK_CDN)
+            val urls = downloadUrlsFor("steam.tzst")
             for (urlStr in urls) {
                 try {
                     Log.d(TAG, "Attempting download from: $urlStr")
@@ -135,13 +140,58 @@ object SteamClientManager {
         }
     }
 
+    private fun downloadUrlsFor(fileName: String): Array<String> {
+        val alternate = when (fileName) {
+            "steam-token.tzst" -> "steam-token-r2.tzst"
+            "experimental-drm-20260116.tzst" -> "experimental-drm-20260116-r2.tzst"
+            else -> null
+        }
+        return if (alternate != null) {
+            arrayOf(
+                "$COMPONENTS_BASE_URL/$fileName",
+                "$COMPONENTS_BASE_URL/$alternate",
+            )
+        } else {
+            arrayOf("$COMPONENTS_BASE_URL/$fileName")
+        }
+    }
+
+    private fun ensureArchiveReady(context: Context, fileName: String, failureMessage: String): Boolean {
+        val dest = File(context.filesDir, fileName)
+        if (dest.exists() && dest.length() > 0) return true
+
+        val tmp = File("${dest.absolutePath}.part")
+        for (urlStr in downloadUrlsFor(fileName)) {
+            try {
+                Log.d(TAG, "Downloading $fileName from: $urlStr")
+                downloadFile(urlStr, tmp, null)
+                if (tmp.exists() && tmp.length() > 0) {
+                    if (!tmp.renameTo(dest)) {
+                        Files.copy(tmp.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                        tmp.delete()
+                    }
+                    Log.d(TAG, "Download completed for $fileName: ${dest.length()} bytes")
+                    return true
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Download failed from $urlStr: ${e.message}")
+                tmp.delete()
+            }
+        }
+
+        Log.e(TAG, "Failed to download $fileName from all sources")
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(context, failureMessage, Toast.LENGTH_LONG).show()
+        }
+        return false
+    }
+
     @JvmStatic
     fun extractSteam(context: Context): Boolean {
         if (isSteamInstalled(context)) return true
 
         val steamFile = File(context.filesDir, "steam.tzst")
-        val expFile = File(context.filesDir, "experimental-drm-20260116.tzst")
-        if (!steamFile.exists() || !expFile.exists()) return false
+        if (!steamFile.exists()) return false
 
         val imageFs = ImageFs.find(context)
         return try {
@@ -151,6 +201,22 @@ object SteamClientManager {
                 imageFs.rootDir,
                 null
             )
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to extract steam archive: ${e.message}")
+            false
+        }
+    }
+
+    @JvmStatic
+    fun extractColdClientSupport(context: Context): Boolean {
+        if (isColdClientInstalled(context)) return true
+
+        val expFile = File(context.filesDir, "experimental-drm-20260116.tzst")
+        if (!expFile.exists()) return false
+
+        val imageFs = ImageFs.find(context)
+        return try {
             TarCompressorUtils.extract(
                 TarCompressorUtils.Type.ZSTD,
                 expFile,
@@ -159,7 +225,7 @@ object SteamClientManager {
             )
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to extract steam archives: ${e.message}")
+            Log.e(TAG, "Failed to extract ColdClient support archive: ${e.message}")
             false
         }
     }
@@ -184,47 +250,8 @@ object SteamClientManager {
                 Toast.makeText(context, "Downloading Steam client...", Toast.LENGTH_SHORT).show()
             }
 
-            val filesToDownload = listOf("steam.tzst", "experimental-drm-20260116.tzst")
-            for (fileName in filesToDownload) {
-                val dest = File(context.filesDir, fileName)
-                if (dest.exists() && dest.length() > 0) continue
-                
-                val tmp = File("${dest.absolutePath}.part")
-                var downloaded = false
-
-                val urls = arrayOf(
-                    if (fileName == "steam.tzst") STEAM_DOWNLOAD_URL else "https://github.com/maxjivi05/Components/releases/download/Components/$fileName",
-                    "https://downloads.gamenative.app/$fileName", 
-                    "https://pub-9fcd5294bd0d4b85a9d73615bf98f3b5.r2.dev/$fileName"
-                )
-                
-                for (urlStr in urls) {
-                    try {
-                        Log.d(TAG, "Downloading from: $urlStr")
-                        downloadFile(urlStr, tmp, null)
-
-                        if (tmp.exists() && tmp.length() > 0) {
-                            if (!tmp.renameTo(dest)) {
-                                Files.copy(tmp.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                                tmp.delete()
-                            }
-                            downloaded = true
-                            Log.d(TAG, "Download completed for $fileName: ${dest.length()} bytes")
-                            break
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Download failed from $urlStr: ${e.message}")
-                        tmp.delete()
-                    }
-                }
-
-                if (!downloaded) {
-                    Log.e(TAG, "Failed to download $fileName from all sources")
-                    Handler(Looper.getMainLooper()).post {
-                        Toast.makeText(context, "Failed to download Steam client", Toast.LENGTH_LONG).show()
-                    }
-                    return false
-                }
+            if (!ensureArchiveReady(context, "steam.tzst", "Failed to download Steam client")) {
+                return false
             }
         }
 
@@ -240,6 +267,47 @@ object SteamClientManager {
             Log.e(TAG, "Failed to extract steam.tzst")
         }
         return success
+    }
+
+    @JvmStatic
+    fun ensureRealSteamSupportReady(context: Context): Boolean {
+        return ensureArchiveReady(context, "steam-token.tzst", "Failed to download Steam token helper")
+    }
+
+    @JvmStatic
+    fun ensureColdClientSupportReady(context: Context): Boolean {
+        if (!ensureArchiveReady(context, "experimental-drm-20260116.tzst", "Failed to download Steam DRM support")) {
+            return false
+        }
+        return extractColdClientSupport(context)
+    }
+
+    @JvmStatic
+    fun ensureSteamlessSupportReady(context: Context): Boolean {
+        val rootDir = ImageFs.find(context).rootDir
+        val steamlessCli = File(rootDir, "Steamless/Steamless.CLI.exe")
+        val generateInterfacesExe = File(rootDir, "generate_interfaces_file.exe")
+        val monoInstaller = File(rootDir, "opt/mono-gecko-offline/wine-mono-9.0.0-x86.msi")
+
+        if (steamlessCli.exists() && generateInterfacesExe.exists() && monoInstaller.exists()) {
+            return true
+        }
+
+        return try {
+            TarCompressorUtils.extract(
+                TarCompressorUtils.Type.ZSTD,
+                context,
+                "extras.tzst",
+                rootDir
+            )
+            chmodIfExists(generateInterfacesExe)
+            chmodIfExists(steamlessCli)
+            chmodIfExists(monoInstaller)
+            steamlessCli.exists() && generateInterfacesExe.exists() && monoInstaller.exists()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to extract Steamless support assets", e)
+            false
+        }
     }
 
     @JvmStatic
@@ -279,6 +347,12 @@ object SteamClientManager {
             return false
         } finally {
             batchFile?.delete()
+        }
+    }
+
+    private fun chmodIfExists(file: File) {
+        if (file.exists()) {
+            FileUtils.chmod(file, 493)
         }
     }
 

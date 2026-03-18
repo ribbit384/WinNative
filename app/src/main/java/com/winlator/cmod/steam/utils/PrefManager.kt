@@ -10,8 +10,7 @@ object PrefManager {
     private var prefs: SharedPreferences? = null
 
     fun init(context: Context) {
-        // Delete legacy plaintext prefs file if it still exists
-        context.deleteSharedPreferences("PluviaPreferences")
+        val legacyPrefs = context.getSharedPreferences("PluviaPreferences", Context.MODE_PRIVATE)
 
         prefs = try {
             val masterKey = MasterKey.Builder(context)
@@ -28,6 +27,31 @@ object PrefManager {
             Timber.e(e, "EncryptedSharedPreferences init failed")
             throw RuntimeException("Failed to initialize secure storage", e)
         }
+
+        migrateLegacyPrefsIfNeeded(legacyPrefs, context)
+    }
+
+    private fun migrateLegacyPrefsIfNeeded(legacyPrefs: SharedPreferences, context: Context) {
+        val encryptedPrefs = prefs ?: return
+        val legacyEntries = legacyPrefs.all
+        if (legacyEntries.isEmpty()) return
+
+        if (encryptedPrefs.all.isEmpty()) {
+            val editor = encryptedPrefs.edit()
+            for ((key, value) in legacyEntries) {
+                when (value) {
+                    is String -> editor.putString(key, value)
+                    is Int -> editor.putInt(key, value)
+                    is Long -> editor.putLong(key, value)
+                    is Boolean -> editor.putBoolean(key, value)
+                    is Float -> editor.putFloat(key, value)
+                }
+            }
+            editor.apply()
+            Timber.i("Migrated legacy Steam preferences into encrypted storage")
+        }
+
+        context.deleteSharedPreferences("PluviaPreferences")
     }
 
     private fun getString(key: String, defaultValue: String): String = prefs?.getString(key, defaultValue) ?: defaultValue

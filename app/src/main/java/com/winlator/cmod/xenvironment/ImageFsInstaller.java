@@ -1,6 +1,7 @@
 package com.winlator.cmod.xenvironment;
 
 import android.content.Context;
+import android.util.Log;
 
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -16,6 +17,9 @@ import com.winlator.cmod.core.FileUtils;
 import com.winlator.cmod.core.PreloaderDialog;
 import com.winlator.cmod.core.TarCompressorUtils;
 import com.winlator.cmod.core.WineInfo;
+import com.winlator.cmod.SteamBridge;
+import com.winlator.cmod.steam.enums.Marker;
+import com.winlator.cmod.steam.utils.MarkerUtils;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -88,6 +92,7 @@ public abstract class ImageFsInstaller {
             if (success) {
                 installWineFromAssets(activity);
                 installDriversFromAssets(activity);
+                installGuestExtras(activity, rootDir);
                 imageFs.createImgVersionFile(LATEST_VERSION);
                 resetContainerImgVersions(activity);
             }
@@ -145,6 +150,8 @@ public abstract class ImageFsInstaller {
                         TarCompressorUtils.extract(TarCompressorUtils.Type.XZ, activity, version + ".txz", outFile);
                     }
                 } catch (Exception e) { /* wine assets may not exist */ }
+                installGuestExtras(activity, rootDir);
+                clearSteamDllMarkers(activity);
                 imageFs.createImgVersionFile(LATEST_VERSION);
             } else {
                 activity.runOnUiThread(() ->
@@ -182,5 +189,56 @@ public abstract class ImageFsInstaller {
             }
         }
         else rootDir.mkdirs();
+    }
+
+    private static void installGuestExtras(Context context, File rootDir) {
+        try {
+            TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, context, "redirect.tzst", rootDir);
+        } catch (Exception e) {
+            Log.w("ImageFsInstaller", "redirect.tzst not found or failed to extract; continuing without redirect libs");
+        }
+
+        try {
+            TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, context, "extras.tzst", rootDir);
+        } catch (Exception e) {
+            Log.w("ImageFsInstaller", "extras.tzst not found or failed to extract; Steamless assets may be missing");
+            return;
+        }
+
+        chmodIfExists(new File(rootDir, "generate_interfaces_file.exe"));
+        chmodIfExists(new File(rootDir, "Steamless/Steamless.CLI.exe"));
+        chmodIfExists(new File(rootDir, "opt/mono-gecko-offline/wine-mono-9.0.0-x86.msi"));
+        chmodIfExists(new File(rootDir, "usr/lib/libredirect.so"));
+        chmodIfExists(new File(rootDir, "usr/lib/libredirect-bionic.so"));
+    }
+
+    private static void chmodIfExists(File file) {
+        if (file.exists()) {
+            FileUtils.chmod(file, 0755);
+        }
+    }
+
+    /**
+     * Remove Steam DLL state markers after reinstalling ImageFS so future launches
+     * re-apply replacements when needed.
+     */
+    private static void clearSteamDllMarkers(Context context) {
+        try {
+            ContainerManager manager = new ContainerManager(context);
+            for (Container container : manager.getContainers()) {
+                try {
+                    int gameId = container.id;
+                    String appDirPath = SteamBridge.getAppDirPath(gameId);
+                    MarkerUtils.INSTANCE.removeMarker(appDirPath, Marker.STEAM_DLL_REPLACED);
+                    MarkerUtils.INSTANCE.removeMarker(appDirPath, Marker.STEAM_DLL_RESTORED);
+                    MarkerUtils.INSTANCE.removeMarker(appDirPath, Marker.STEAM_COLDCLIENT_USED);
+                    Log.i("ImageFsInstaller", "Cleared Steam markers for container " + container.getName() + " (ID: " + container.id + ")");
+                } catch (Exception e) {
+                    Log.w("ImageFsInstaller", "Failed to clear markers for container ID " + container.id, e);
+                }
+            }
+        } catch (Exception e) {
+            Log.e("ImageFsInstaller", "Error clearing Steam DLL markers", e);
+        }
     }
 }

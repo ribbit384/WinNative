@@ -732,14 +732,30 @@ object SteamAutoCloud {
                 }
             }
 
-            if (localAppChangeNumber < cloudAppChangeNumber) {
+            val remoteHasFiles = appFileListChange.files.isNotEmpty()
+            val localHasFiles = allLocalUserFiles.isNotEmpty()
+            val forcingDownloadMissingLocal = remoteHasFiles && !localHasFiles && cloudAppChangeNumber >= 0
+            val effectiveLocalAppChangeNumber = if (forcingDownloadMissingLocal) {
+                Timber.w(
+                    "Cloud has ${appFileListChange.files.size} file(s) but no local saves; forcing download (changeNumber=$cloudAppChangeNumber)"
+                )
+                -1
+            } else {
+                localAppChangeNumber
+            }
+
+            if (effectiveLocalAppChangeNumber < cloudAppChangeNumber) {
                 microsecAcLaunch = measureTime {
                     var hasLocalChanges: Boolean
 
                     microsecAcPrepUserFiles = measureTime {
-                        hasLocalChanges = steamInstance.fileChangeListsDao.getByAppId(appInfo.id)?.let {
-                            getFilesDiff(allLocalUserFiles, it.userFileInfo).first
-                        } == true
+                        hasLocalChanges = if (forcingDownloadMissingLocal) {
+                            false
+                        } else {
+                            steamInstance.fileChangeListsDao.getByAppId(appInfo.id)?.let {
+                                getFilesDiff(allLocalUserFiles, it.userFileInfo).first
+                            } == true
+                        }
                     }.inWholeMicroseconds
 
                     if (!hasLocalChanges) {
@@ -770,7 +786,7 @@ object SteamAutoCloud {
                         }
                     }
                 }.inWholeMicroseconds
-            } else if (localAppChangeNumber == cloudAppChangeNumber) {
+            } else if (effectiveLocalAppChangeNumber == cloudAppChangeNumber) {
                 microsecAcExit = measureTime {
                     val hasLocalChanges = steamInstance.fileChangeListsDao.getByAppId(appInfo.id)
                         ?.let {

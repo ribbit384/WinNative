@@ -90,6 +90,21 @@ public class SteamBridge {
     }
 
     /**
+     * Downloads experimental-drm if missing, then extracts it. Blocking call.
+     */
+    public static boolean ensureColdClientSupportReady(Context context) {
+        try {
+            Class<?> clazz = Class.forName("com.winlator.cmod.steam.SteamClientManager");
+            Object instance = clazz.getField("INSTANCE").get(null);
+            Method method = clazz.getMethod("ensureColdClientSupportReady", Context.class);
+            return (Boolean) method.invoke(instance, context);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to call SteamClientManager.ensureColdClientSupportReady", e);
+            return false;
+        }
+    }
+
+    /**
      * Get the encrypted app ticket as base64 string for the given appId.
      * Requires an active Steam login. Returns null if not logged in or ticket unavailable.
      */

@@ -84,39 +84,77 @@ object SteamControllerVdfUtils {
         forceBinding: String? = null,
         keymap: Map<String, String> = keymapDigital,
     ) {
-        val inputs = group.getObject("inputs") ?: return
-        for ((inputName, inputValue) in inputs.objectEntries()) {
-            for (activator in inputValue.objectValues()) {
-                for (fullPress in activator.objectValues()) {
-                    for (bindingGroup in fullPress.objectValues()) {
-                        for ((bindingKey, bindingValue) in bindingGroup.stringEntries()) {
-                            if (!bindingKey.equals("binding", ignoreCase = true)) continue
-                            val tokens = bindingValue.split(Regex("\\s+"))
-                            if (tokens.isEmpty()) continue
+        for ((inputName, actionName) in collectInputActionNames(group)) {
+            if (actionName.isNullOrEmpty()) continue
 
-                            val actionName = when (tokens[0].lowercase()) {
-                                "game_action" -> tokens.getOrNull(2)?.trimEnd(',')
-                                "xinput_button" -> tokens.getOrNull(1)?.trimEnd(',')
-                                else -> null
-                            }
+            val binding = forceBinding ?: keymap[inputName.lowercase()]
+            if (binding.isNullOrEmpty()) {
+                Timber.tag("SteamControllerVdf").d("Missing keymap for $inputName")
+                continue
+            }
 
-                            if (actionName.isNullOrEmpty()) continue
+            val list = bindings.getOrPut(actionName) { mutableListOf() }
+            if (!list.contains(binding)) {
+                list.add(binding)
+            }
+        }
+    }
 
-                            val binding = forceBinding ?: keymap[inputName.lowercase()]
-                            if (binding.isNullOrEmpty()) {
-                                Timber.tag("SteamControllerVdf").d("Missing keymap for $inputName")
-                                continue
-                            }
+    private fun collectInputActionNames(group: VdfObject): List<Pair<String, String>> {
+        val result = mutableListOf<Pair<String, String>>()
 
-                            val list = bindings.getOrPut(actionName) { mutableListOf() }
-                            if (!list.contains(binding)) {
-                                list.add(binding)
+        val inputs = group.getObject("inputs")
+        if (inputs != null) {
+            for ((inputName, inputValue) in inputs.objectEntries()) {
+                for (activator in inputValue.objectValues()) {
+                    for (fullPress in activator.objectValues()) {
+                        for (bindingGroup in fullPress.objectValues()) {
+                            for ((bindingKey, bindingValue) in bindingGroup.stringEntries()) {
+                                if (!bindingKey.equals("binding", ignoreCase = true)) continue
+                                val actionName = parseBindingActionName(bindingValue) ?: continue
+                                result.add(inputName to actionName)
                             }
                         }
                     }
                 }
             }
         }
+
+        val directBindings = group.getObject("bindings")
+        if (directBindings != null) {
+            for ((inputName, bindingValue) in directBindings.stringEntries()) {
+                val actionName = parseBindingActionName(bindingValue) ?: continue
+                result.add(inputName to actionName)
+            }
+        }
+
+        return result
+    }
+
+    private fun parseBindingActionName(bindingValue: String): String? {
+        val tokens = bindingValue.split(Regex("\\s+"))
+        if (tokens.isEmpty()) return null
+
+        return when (tokens[0].lowercase()) {
+            "game_action" -> tokens.getOrNull(2)?.trimEnd(',')
+            "xinput_button" -> tokens.getOrNull(1)?.trimEnd(',')
+            else -> null
+        }
+    }
+
+    private fun resolveGroupActionName(
+        group: VdfObject,
+        presetName: String,
+        fallbackXinputButtons: Set<String>,
+    ): String? {
+        val explicitActionName = group.getObject("gameactions")?.getString(presetName)
+        if (!explicitActionName.isNullOrEmpty()) {
+            return explicitActionName
+        }
+
+        return collectInputActionNames(group)
+            .firstOrNull { (_, actionName) -> fallbackXinputButtons.contains(actionName.uppercase()) }
+            ?.second
     }
 
     private fun addActionBinding(
@@ -151,14 +189,24 @@ object SteamControllerVdfUtils {
             val group = groupsById[groupId] ?: continue
             val groupMode = group.getString("mode")?.lowercase().orEmpty()
             val bindingType = tokens[0].lowercase()
+            val isLeftStickSource = bindingType in listOf("joystick", "left_trackpad")
+            val isRightStickSource = bindingType in listOf("right_joystick", "right_trackpad")
 
             if (bindingType in listOf("switch", "button_diamond", "dpad")) {
                 addInputBindings(group, bindings)
             }
 
+            if (bindingType in listOf("left_trackpad", "right_trackpad") && groupMode == "dpad") {
+                addInputBindings(group, bindings)
+            }
+
             if (bindingType in listOf("left_trigger", "right_trigger")) {
                 if (groupMode == "trigger") {
-                    val actionName = group.getObject("gameactions")?.getString(presetName)
+                    val actionName = resolveGroupActionName(
+                        group,
+                        presetName,
+                        fallbackXinputButtons = setOf("TRIGGER_LEFT", "TRIGGER_RIGHT"),
+                    )
                     if (!actionName.isNullOrEmpty()) {
                         val binding = if (bindingType == "left_trigger") "LTRIGGER" else "RTRIGGER"
                         addActionBinding(bindings, actionName, binding, bindingSuffix = "trigger")
@@ -170,13 +218,17 @@ object SteamControllerVdfUtils {
                 }
             }
 
-            if (bindingType in listOf("joystick", "right_joystick", "dpad")) {
-                if (groupMode == "joystick_move") {
-                    val actionName = group.getObject("gameactions")?.getString(presetName)
+            if (bindingType in listOf("joystick", "right_joystick", "dpad", "left_trackpad", "right_trackpad")) {
+                if (groupMode == "joystick_move" || groupMode == "joystick_camera") {
+                    val actionName = resolveGroupActionName(
+                        group,
+                        presetName,
+                        fallbackXinputButtons = setOf("JOYSTICK_LEFT", "JOYSTICK_RIGHT"),
+                    )
                     if (!actionName.isNullOrEmpty()) {
                         val binding = when (bindingType) {
-                            "joystick" -> "LJOY"
-                            "right_joystick" -> "RJOY"
+                            "joystick", "left_trackpad" -> "LJOY"
+                            "right_joystick", "right_trackpad" -> "RJOY"
                             "dpad" -> "DPAD"
                             else -> ""
                         }
@@ -184,10 +236,17 @@ object SteamControllerVdfUtils {
                             addActionBinding(bindings, actionName, binding, bindingSuffix = "joystick_move")
                         }
                     }
-                    val forceBinding = if (bindingType == "joystick") "LSTICK" else "RSTICK"
-                    addInputBindings(group, bindings, forceBinding = forceBinding)
+                    val forceBinding = when {
+                        isLeftStickSource -> "LSTICK"
+                        isRightStickSource -> "RSTICK"
+                        bindingType == "dpad" -> "RSTICK"
+                        else -> null
+                    }
+                    if (forceBinding != null) {
+                        addInputBindings(group, bindings, forceBinding = forceBinding)
+                    }
                 } else if (groupMode == "dpad") {
-                    if (bindingType == "joystick") {
+                    if (isLeftStickSource) {
                         val bindingMap = mapOf(
                             "dpad_north" to "DLJOYUP",
                             "dpad_south" to "DLJOYDOWN",
@@ -196,7 +255,7 @@ object SteamControllerVdfUtils {
                             "click" to "LSTICK",
                         )
                         addInputBindings(group, bindings, keymap = bindingMap)
-                    } else if (bindingType == "right_joystick") {
+                    } else if (isRightStickSource) {
                         val bindingMap = mapOf(
                             "dpad_north" to "DRJOYUP",
                             "dpad_south" to "DRJOYDOWN",

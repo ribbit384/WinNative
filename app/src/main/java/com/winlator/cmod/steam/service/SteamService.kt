@@ -60,8 +60,10 @@ import com.winlator.cmod.steam.enums.ControllerSupport
 import com.winlator.cmod.steam.enums.GameSource
 import com.winlator.cmod.core.GPUInformation
 import dagger.hilt.android.AndroidEntryPoint
+import `in`.dragonbra.javasteam.base.ClientMsgProtobuf
 import `in`.dragonbra.javasteam.enums.EDepotFileFlag
 import `in`.dragonbra.javasteam.enums.ELicenseFlags
+import `in`.dragonbra.javasteam.enums.EMsg
 import `in`.dragonbra.javasteam.enums.EOSType
 import `in`.dragonbra.javasteam.enums.EPersonaState
 import `in`.dragonbra.javasteam.enums.EResult
@@ -69,6 +71,7 @@ import `in`.dragonbra.javasteam.networking.steam3.ProtocolTypes
 import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesClientObjects.ECloudPendingRemoteOperation
 import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesFamilygroupsSteamclient
 import `in`.dragonbra.javasteam.rpc.service.FamilyGroups
+import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesClientserverUserstats
 import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesAuthSteamclient.CAuthentication_PollAuthSessionStatus_Request
 import `in`.dragonbra.javasteam.rpc.service.Authentication
 import `in`.dragonbra.javasteam.steam.authentication.AuthPollResult
@@ -113,6 +116,7 @@ import `in`.dragonbra.javasteam.util.log.LogListener
 import `in`.dragonbra.javasteam.util.log.LogManager
 import java.io.Closeable
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.Collections
@@ -162,6 +166,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.FormBody
+import org.json.JSONArray
 import org.json.JSONObject
 import android.util.Base64
 import com.winlator.cmod.steam.data.DownloadingAppInfo
@@ -172,6 +177,12 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import `in`.dragonbra.javasteam.steam.handlers.steamuserstats.Stats
+import com.winlator.cmod.steam.statsgen.StatType
+import com.winlator.cmod.steam.statsgen.StatsAchievementsGenerator
+import com.winlator.cmod.steam.statsgen.VdfParser
 
 @AndroidEntryPoint
 class SteamService : Service(), IChallengeUrlChanged {
@@ -227,6 +238,7 @@ class SteamService : Service(), IChallengeUrlChanged {
     private var _steamApps: SteamApps? = null
     private var _steamFriends: SteamFriends? = null
     private var _steamCloud: SteamCloud? = null
+    private var _steamUserStats: SteamUserStats? = null
     private var _steamFamilyGroups: FamilyGroups? = null
 
     private var _loginResult: LoginResult = LoginResult.Failed
@@ -291,6 +303,7 @@ class SteamService : Service(), IChallengeUrlChanged {
         private const val DOWNLOAD_INFO_DIR = ".DownloadInfo"
         private const val DOWNLOAD_INFO_FILE = "depot_bytes.json"
         private const val LEGACY_DOWNLOAD_INFO_FILE = "bytes_downloaded.txt"
+        private const val COMPONENTS_BASE_URL = "https://github.com/maxjivi05/Components/releases/download/Components"
 
         /**
          * Default timeout to use when making requests
@@ -306,7 +319,33 @@ class SteamService : Service(), IChallengeUrlChanged {
 
         internal var instance: SteamService? = null
 
+        var cachedAchievements: List<com.winlator.cmod.steam.statsgen.Achievement>? = null
+            private set
+        var cachedAchievementsAppId: Int? = null
+            private set
+
+        fun clearCachedAchievements() {
+            cachedAchievements = null
+            cachedAchievementsAppId = null
+        }
+
         val isWifiConnected: Boolean get() = NetworkMonitor.isWifiConnected.value
+
+        private fun downloadUrlsFor(fileName: String): List<String> {
+            val alternate = when (fileName) {
+                "steam-token.tzst" -> "steam-token-r2.tzst"
+                "experimental-drm-20260116.tzst" -> "experimental-drm-20260116-r2.tzst"
+                else -> null
+            }
+            return if (alternate != null) {
+                listOf(
+                    "$COMPONENTS_BASE_URL/$fileName",
+                    "$COMPONENTS_BASE_URL/$alternate",
+                )
+            } else {
+                listOf("$COMPONENTS_BASE_URL/$fileName")
+            }
+        }
 
         /** @return true if download may proceed; false if blocked (notifies user) */
         private fun checkWifiOrNotify(): Boolean {
@@ -1745,21 +1784,29 @@ class SteamService : Service(), IChallengeUrlChanged {
             context: Context,
             onProgress: (Float) -> Unit,
         ) = withContext(Dispatchers.IO) {
-            val primaryUrl = "https://downloads.gamenative.app/$fileName"
-            val fallbackUrl = "https://pub-9fcd5294bd0d4b85a9d73615bf98f3b5.r2.dev/$fileName"
-            try {
-                fetchFile(primaryUrl, dest, onProgress)
-            } catch (e: Exception) {
-                Timber.w(e, "Primary download failed; retrying with fallback URL")
+            val urls = downloadUrlsFor(fileName)
+            var lastError: Exception? = null
+            for ((index, url) in urls.withIndex()) {
                 try {
-                    fetchFile(fallbackUrl, dest, onProgress)
-                } catch (e2: Exception) {
-                    withContext(Dispatchers.Main) {
-                        val msg = "Download failed with ${e2.message ?: e2.toString()}. Please disable VPN or try a different network."
-                        android.widget.Toast.makeText(context.applicationContext, msg, android.widget.Toast.LENGTH_LONG).show()
+                    fetchFile(url, dest, onProgress)
+                    return@withContext
+                } catch (e: Exception) {
+                    lastError = e
+                    if (index < urls.lastIndex) {
+                        Timber.w(e, "Download failed from $url; retrying with next URL")
                     }
                 }
             }
+
+            dest.delete()
+            withContext(Dispatchers.Main) {
+                val msg = "Download failed with ${lastError?.message ?: "unknown error"}. Please disable VPN or try a different network."
+                android.widget.Toast.makeText(context.applicationContext, msg, android.widget.Toast.LENGTH_LONG).show()
+            }
+            throw IOException(
+                "Failed to download $fileName. Please check your network connection or try a VPN.",
+                lastError,
+            )
         }
 
         /** copyTo with progress callback */
@@ -1845,6 +1892,7 @@ class SteamService : Service(), IChallengeUrlChanged {
                 "controller_xbox360",
                 "controller_xboxone",
                 "controller_steamcontroller_gordon",
+                "controller_generic",
             )
 
             for (branch in branchPriority) {
@@ -1941,14 +1989,20 @@ class SteamService : Service(), IChallengeUrlChanged {
             baseDirPath: String,
             relativePath: String,
         ): File? {
-            val directFile = File(baseDirPath, relativePath)
+            val normalizedPath = relativePath.replace('\\', '/')
+            val directFile = File(baseDirPath, normalizedPath)
             if (directFile.exists()) return directFile
 
             var currentDir = File(baseDirPath)
             if (!currentDir.exists() || !currentDir.isDirectory) return null
 
-            val segments = relativePath.split('/', '\\').filter { it.isNotEmpty() }
+            val segments = normalizedPath.split('/').filter { it.isNotEmpty() }
             for ((index, segment) in segments.withIndex()) {
+                if (segment == ".") continue
+                if (segment == "..") {
+                    currentDir = currentDir.parentFile ?: return null
+                    continue
+                }
                 val entries = currentDir.listFiles() ?: return null
                 val matched = entries.firstOrNull {
                     it.name.equals(segment, ignoreCase = true)
@@ -1992,7 +2046,7 @@ class SteamService : Service(), IChallengeUrlChanged {
                 2, 12 -> readBuiltInSteamInputTemplate("controller_xboxone_gamepad_fps.vdf")
                 6 -> readBuiltInSteamInputTemplate("controller_xboxone_wasd.vdf")
                 4, 5 -> readBuiltInSteamInputTemplate("gamepad_joystick.vdf")
-                else -> readBuiltInSteamInputTemplate("gamepad+mouse.vdf")
+                else -> readBuiltInSteamInputTemplate("gamepad_joystick.vdf")
             }
         }
 
@@ -3390,6 +3444,242 @@ class SteamService : Service(), IChallengeUrlChanged {
             }
         }
 
+        suspend fun generateAchievements(appId: Int, configDirectory: String) = runCatching {
+            val steamUser = instance?._steamUser ?: return@runCatching
+            val userStats = instance?._steamUserStats?.getUserStats(appId, steamUser.steamID!!)?.await() ?: return@runCatching
+            val schemaArray = userStats.schema.toByteArray()
+            val generator = StatsAchievementsGenerator()
+            val result = generator.generateStatsAchievements(schemaArray, configDirectory)
+            cachedAchievements = result.achievements
+            cachedAchievementsAppId = appId
+
+            val nameToBlockBit = result.nameToBlockBit
+            if (nameToBlockBit.isNotEmpty()) {
+                val mappingJson = JSONObject()
+                nameToBlockBit.forEach { (name, pair) ->
+                    mappingJson.put(name, JSONArray(listOf(pair.first, pair.second)))
+                }
+                File(configDirectory, "achievement_name_to_block.json").writeText(mappingJson.toString(), Charsets.UTF_8)
+            }
+        }.onFailure { e ->
+            Timber.w(e, "Failed to generate achievements for appId=$appId")
+        }
+
+        fun getGseSaveDirs(appId: Int): List<File> {
+            val context = instance?.applicationContext ?: return emptyList()
+            val imageFs = ImageFs.find(context)
+            val dirs = mutableListOf<File>()
+            dirs.add(File(
+                imageFs.rootDir,
+                "${ImageFs.WINEPREFIX}/drive_c/users/xuser/AppData/Roaming/GSE Saves/$appId"
+            ))
+            val accountId = userSteamId?.accountID?.toInt()
+                ?: PrefManager.steamUserAccountId.takeIf { it != 0 }
+            if (accountId != null) {
+                dirs.add(File(
+                    imageFs.rootDir,
+                    "${ImageFs.WINEPREFIX}/drive_c/Program Files (x86)/Steam/userdata/$accountId/$appId"
+                ))
+            }
+            return dirs
+        }
+
+        suspend fun syncAchievementsFromGoldberg(appId: Int) {
+            val context = instance?.applicationContext ?: return
+            val gseSaveDirs = getGseSaveDirs(appId).filter { it.isDirectory }
+            if (gseSaveDirs.isEmpty()) {
+                Timber.d("No GSE save directory found for appId=$appId")
+                return
+            }
+
+            val unlockedNames = mutableSetOf<String>()
+            var gseStatsDir: File? = null
+
+            for (gseSaveDir in gseSaveDirs) {
+                val goldbergAchFile = File(gseSaveDir, "achievements.json")
+                if (goldbergAchFile.exists()) {
+                    try {
+                        val json = JSONObject(goldbergAchFile.readText(Charsets.UTF_8))
+                        for (name in json.keys()) {
+                            val entry = json.optJSONObject(name) ?: continue
+                            if (entry.optBoolean("earned", false)) {
+                                unlockedNames.add(name)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Timber.e(e, "Failed to parse Goldberg achievements.json in ${gseSaveDir.absolutePath} for appId=$appId")
+                    }
+                }
+
+                val statsDir = File(gseSaveDir, "stats")
+                if (gseStatsDir == null && statsDir.isDirectory && (statsDir.listFiles()?.isNotEmpty() == true)) {
+                    gseStatsDir = statsDir
+                }
+            }
+
+            val hasStats = gseStatsDir != null
+
+            if (unlockedNames.isEmpty() && !hasStats) {
+                Timber.d("No earned achievements or stats found in Goldberg output for appId=$appId")
+                return
+            }
+
+            val configDirectory = findSteamSettingsDir(context, appId)
+            if (configDirectory == null) {
+                Timber.w("Could not find steam_settings directory for appId=$appId")
+                return
+            }
+
+            val result = storeAchievementUnlocks(appId, configDirectory, unlockedNames, gseStatsDir ?: gseSaveDirs.first().resolve("stats"))
+            result.onFailure { e ->
+                Timber.e(e, "Failed to sync achievements and stats to Steam for appId=$appId")
+            }
+        }
+
+        private fun findSteamSettingsDir(context: Context, appId: Int): String? {
+            val appDirPath = getAppDirPath(appId)
+            val appDirSettings = File(appDirPath, "steam_settings")
+            if (appDirSettings.isDirectory) {
+                return appDirSettings.absolutePath
+            }
+
+            val container = ContainerUtils.getContainer(context, "STEAM_$appId") ?: return null
+            val coldclientSettings = File(
+                container.rootDir,
+                ".wine/drive_c/Program Files (x86)/Steam/steam_settings"
+            )
+            if (coldclientSettings.isDirectory) {
+                return coldclientSettings.absolutePath
+            }
+
+            return null
+        }
+
+        suspend fun storeAchievementUnlocks(
+            appId: Int,
+            configDirectory: String,
+            unlockedNames: Set<String>,
+            gseStatsDir: File
+        ): Result<Unit> = runCatching {
+            val steamUser = instance!!._steamUser!!
+            val userStats = instance?._steamUserStats!!.getUserStats(appId, steamUser.steamID!!).await()
+            if (userStats.result != EResult.OK) {
+                throw IllegalStateException("getUserStats failed: ${userStats.result}")
+            }
+
+            val allStats = mutableMapOf<Int, Int>()
+
+            val mappingFile = File(configDirectory, "achievement_name_to_block.json")
+            if (!mappingFile.exists() && unlockedNames.isNotEmpty()) {
+                generateAchievements(appId, configDirectory)
+            }
+
+            if (mappingFile.exists() && unlockedNames.isNotEmpty()) {
+                val mappingJson = JSONObject(mappingFile.readText(Charsets.UTF_8))
+                val nameToBlockBit = mutableMapOf<String, Pair<Int, Int>>()
+                for (key in mappingJson.keys()) {
+                    val arr = mappingJson.optJSONArray(key) ?: continue
+                    if (arr.length() >= 2) {
+                        nameToBlockBit[key] = Pair(arr.getInt(0), arr.getInt(1))
+                    }
+                }
+
+                for (block in userStats.achievementBlocks ?: emptyList()) {
+                    val blockId = (block.achievementId as? Number)?.toInt() ?: continue
+                    var bitmask = 0
+                    val unlockTimes = block.unlockTime ?: emptyList()
+                    for (i in unlockTimes.indices) {
+                        val t = unlockTimes[i]
+                        if ((t as? Number)?.toLong() != 0L) bitmask = bitmask or (1 shl i)
+                    }
+                    allStats[blockId] = bitmask
+                }
+
+                for (name in unlockedNames) {
+                    val mapped = nameToBlockBit[name] ?: continue
+                    val current = allStats.getOrDefault(mapped.first, 0)
+                    allStats[mapped.first] = current or (1 shl mapped.second)
+                }
+            }
+
+            if (gseStatsDir.isDirectory) {
+                val statNameToId = mutableMapOf<String, Int>()
+                try {
+                    val parsedSchema = VdfParser().binaryLoads(userStats.schema.toByteArray())
+                    for ((_, appData) in parsedSchema) {
+                        if (appData !is Map<*, *>) continue
+                        val statInfo = (appData as Map<String, Any>)["stats"] as? Map<String, Any> ?: continue
+                        for ((statKey, statData) in statInfo) {
+                            if (statData !is Map<*, *>) continue
+                            val stat = statData as Map<String, Any>
+                            val statType = stat["type"]?.toString() ?: continue
+                            if (statType == StatType.STAT_TYPE_BITS || statType == StatType.ACHIEVEMENTS) continue
+                            val name = stat["name"]?.toString()?.lowercase() ?: continue
+                            val id = statKey.toIntOrNull() ?: continue
+                            statNameToId[name] = id
+                        }
+                    }
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to parse schema for stat name mapping, appId=$appId")
+                }
+
+                if (statNameToId.isNotEmpty()) {
+                    for (statFile in gseStatsDir.listFiles() ?: emptyArray()) {
+                        if (!statFile.isFile) continue
+                        val statId = statNameToId[statFile.name.lowercase()] ?: continue
+                        val bytes = statFile.readBytes()
+                        if (bytes.size >= 4) {
+                            val value = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).int
+                            allStats[statId] = value
+                            Timber.d("Read GSE stat: ${statFile.name} -> statId=$statId, value=$value")
+                        }
+                    }
+                }
+            }
+
+            if (allStats.isEmpty()) {
+                Timber.d("No stats or achievements to store for appId=$appId")
+                return@runCatching
+            }
+
+            val statsToStore = allStats.map { (id, value) -> Stats(statId = id, statValue = value) }
+            val mySteamId = steamUser.steamID!!
+            Timber.d("storeUserStats: appId=$appId, crcStats=${userStats.crcStats}, stats=$statsToStore")
+            sendStoreUserStats(appId, statsToStore, mySteamId, userStats.crcStats)
+        }
+
+        private fun sendStoreUserStats(
+            appId: Int,
+            stats: List<Stats>,
+            steamId: SteamID,
+            crcStats: Int
+        ) {
+            val client = instance?.steamClient ?: return
+            runCatching {
+                val msg: ClientMsgProtobuf<SteammessagesClientserverUserstats.CMsgClientStoreUserStats2.Builder> = ClientMsgProtobuf(
+                    SteammessagesClientserverUserstats.CMsgClientStoreUserStats2::class.java,
+                    EMsg.ClientStoreUserStats2,
+                )
+                msg.sourceJobID = client.getNextJobID()
+                msg.protoHeader.setRoutingAppid(appId)
+                msg.body.setGameId(appId.toLong())
+                msg.body.setSettorSteamId(steamId.convertToUInt64())
+                msg.body.setSetteeSteamId(steamId.convertToUInt64())
+                msg.body.setCrcStats(crcStats)
+                stats.forEach { stat ->
+                    msg.body.addStats(
+                        SteammessagesClientserverUserstats.CMsgClientStoreUserStats2.Stats.newBuilder()
+                            .setStatId(stat.statId)
+                            .setStatValue(stat.statValue)
+                            .build()
+                    )
+                }
+                client.send(msg)
+            }.onFailure { e ->
+                Timber.e(e, "Failed to send storeUserStats for appId=$appId")
+            }
+        }
+
         suspend fun closeApp(
             appId: Int,
             isOffline: Boolean,
@@ -3407,6 +3697,12 @@ class SteamService : Service(), IChallengeUrlChanged {
                 }
 
                 try {
+                    try {
+                        syncAchievementsFromGoldberg(appId)
+                    } catch (e: Exception) {
+                        Timber.e(e, "Achievement sync failed for appId=$appId, continuing with cloud save sync")
+                    }
+
                     val progressWrapper: (String, Float) -> Unit = { msg, prog ->
                         cloudSyncStatus.value = CloudSyncMessage(appId, true, msg, prog)
                         onProgress?.invoke(msg, prog)
@@ -3462,7 +3758,9 @@ class SteamService : Service(), IChallengeUrlChanged {
 
         @JvmStatic
         fun syncCloudOnExit(context: android.content.Context, appId: Int, callback: CloudSyncCallback) {
-            val accountId = userSteamId?.accountID ?: 0L
+            val accountId = userSteamId?.accountID?.toLong()
+                ?: PrefManager.steamUserAccountId.takeIf { it != 0 }?.toLong()
+                ?: 0L
             val prefixToPath: (String) -> String = { prefix ->
                 com.winlator.cmod.steam.enums.PathType.from(prefix).toAbsPath(context, appId, accountId)
             }
@@ -3885,8 +4183,7 @@ class SteamService : Service(), IChallengeUrlChanged {
                         // We NO LONGER delete apps, change numbers, or file lists here.
                         // This preserves the installed games and shortcuts.
                         // appDao.deleteAll()
-                        // changeNumbersDao.deleteAll()
-                        // fileChangeListsDao.deleteAll()
+                        // We keep app metadata, but cloud sync caches are cleared separately.
                         
                         licenseDao.deleteAll()
                         encryptedAppTicketDao.deleteAll()
@@ -3896,10 +4193,23 @@ class SteamService : Service(), IChallengeUrlChanged {
             }
         }
 
+        private fun clearCloudSyncCaches() {
+            instance?.let { svc ->
+                svc.scope.launch {
+                    svc.db.withTransaction {
+                        svc.changeNumbersDao.deleteAll()
+                        svc.fileChangeListsDao.deleteAll()
+                    }
+                    Timber.i("Cleared cloud sync caches (change numbers + file lists)")
+                }
+            }
+        }
+
         private fun performLogOffDuties() {
             val username = PrefManager.username
 
             clearUserData()
+            clearCloudSyncCaches()
 
             val event = SteamEvent.LoggedOut(username)
             PluviaApp.events.emit(event)
@@ -4114,7 +4424,6 @@ class SteamService : Service(), IChallengeUrlChanged {
                 removeHandler(SteamMasterServer::class.java)
                 removeHandler(SteamWorkshop::class.java)
                 removeHandler(SteamScreenshots::class.java)
-                removeHandler(SteamUserStats::class.java)
             }
 
             // create the callback manager which will route callbacks to function calls
@@ -4125,6 +4434,7 @@ class SteamService : Service(), IChallengeUrlChanged {
             _steamApps = steamClient!!.getHandler(SteamApps::class.java)
             _steamFriends = steamClient!!.getHandler(SteamFriends::class.java)
             _steamCloud = steamClient!!.getHandler(SteamCloud::class.java)
+            _steamUserStats = steamClient!!.getHandler(SteamUserStats::class.java)
 
             _unifiedFriends = SteamUnifiedFriends(this)
             _steamFamilyGroups = steamClient!!.getHandler<SteamUnifiedMessages>()!!.createService<FamilyGroups>()
@@ -4344,6 +4654,7 @@ class SteamService : Service(), IChallengeUrlChanged {
             if (PrefManager.steamUserAccountId != userSteamId!!.accountID.toInt()) {
                 PrefManager.steamUserAccountId = userSteamId!!.accountID.toInt()
                 Timber.d("Saving logged in Steam accountID ${userSteamId!!.accountID.toInt()}")
+                clearCloudSyncCaches()
             }
             val steamId64 = userSteamId!!.convertToUInt64()
             if (PrefManager.steamUserSteamId64 != steamId64) {

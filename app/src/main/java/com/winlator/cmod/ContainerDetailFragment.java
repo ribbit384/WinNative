@@ -95,7 +95,9 @@ public class ContainerDetailFragment extends Fragment {
             "dxwrapper", "dxwrapperConfig", "audioDriver", "emulator", "emulator64", "wincomponents",
             "drives", "showFPS", "fullscreenStretched", "inputType", "disableXinput",
             "startupSelection", "box64Version", "box64Preset", "fexcoreVersion", "fexcorePreset",
-            "desktopTheme", "midiSoundFont", "lc_all", "primaryController", "controllerMapping"
+            "desktopTheme", "midiSoundFont", "lc_all", "primaryController", "controllerMapping",
+            "launchRealSteam", "useLegacyDRM", "useSteamInput",
+            "steamType", "forceDlc", "steamOfflineMode", "unpackFiles"
     };
 
     private ContainerManager manager;
@@ -441,6 +443,8 @@ public class ContainerDetailFragment extends Fragment {
 
         CompoundButton cbShowFPS = view.findViewById(R.id.CBShowFPS);
         CompoundButton cbFullscreenStretched = view.findViewById(R.id.CBFullscreenStretched);
+        CompoundButton cbUseLegacyDRM = view.findViewById(R.id.CBUseLegacyDRM);
+        CompoundButton cbLaunchRealSteam = view.findViewById(R.id.CBLaunchRealSteam);
 
         CPUListView cpuListView = view.findViewById(R.id.CPUListView);
         CPUListView cpuListViewWoW64 = view.findViewById(R.id.CPUListViewWoW64);
@@ -523,6 +527,18 @@ public class ContainerDetailFragment extends Fragment {
         snapshot.put("lc_all", etLC_ALL.getText().toString());
         snapshot.put("primaryController", String.valueOf(Math.max(0, sPrimaryController.getSelectedItemPosition())));
         snapshot.put("controllerMapping", getControllerMapping(view));
+        snapshot.put("useLegacyDRM", cbUseLegacyDRM != null && cbUseLegacyDRM.isChecked() ? "1" : "0");
+        snapshot.put("launchRealSteam", cbLaunchRealSteam != null && cbLaunchRealSteam.isChecked() ? "1" : "0");
+        CompoundButton cbUseSteamInput = view.findViewById(R.id.CBUseSteamInput);
+        snapshot.put("useSteamInput", cbUseSteamInput != null && cbUseSteamInput.isChecked() ? "1" : "0");
+        Spinner sSteamType = view.findViewById(R.id.SSteamType);
+        snapshot.put("steamType", sSteamType != null ? String.valueOf(sSteamType.getSelectedItemPosition()) : "0");
+        CompoundButton cbForceDlc = view.findViewById(R.id.CBForceDlc);
+        snapshot.put("forceDlc", cbForceDlc != null && cbForceDlc.isChecked() ? "1" : "0");
+        CompoundButton cbSteamOfflineMode = view.findViewById(R.id.CBSteamOfflineMode);
+        snapshot.put("steamOfflineMode", cbSteamOfflineMode != null && cbSteamOfflineMode.isChecked() ? "1" : "0");
+        CompoundButton cbUnpackFiles = view.findViewById(R.id.CBUnpackFiles);
+        snapshot.put("unpackFiles", cbUnpackFiles != null && cbUnpackFiles.isChecked() ? "1" : "0");
         return snapshot;
     }
 
@@ -705,6 +721,66 @@ public class ContainerDetailFragment extends Fragment {
         final CompoundButton cbFullscreenStretched = view.findViewById(R.id.CBFullscreenStretched);
         cbFullscreenStretched.setChecked(isShortcutMode() ? shortcut.getExtra("fullscreenStretched", container != null && container.isFullscreenStretched() ? "1" : "0").equals("1") : (isEditMode() && container != null && container.isFullscreenStretched()));
 
+        String activeGameSource = isShortcutMode() ? shortcut.getExtra("game_source", createShortcutForSource) : createShortcutForSource;
+        boolean showSteamSettings = "STEAM".equals(activeGameSource) && (isShortcutMode() || isCreateShortcutMode());
+        final View llSteamSettings = view.findViewById(R.id.LLSteamSettings);
+        llSteamSettings.setVisibility(showSteamSettings ? View.VISIBLE : View.GONE);
+        final CompoundButton cbUseLegacyDRM = view.findViewById(R.id.CBUseLegacyDRM);
+        final CompoundButton cbLaunchRealSteam = view.findViewById(R.id.CBLaunchRealSteam);
+        final CompoundButton cbUseSteamInput = view.findViewById(R.id.CBUseSteamInput);
+        boolean defaultUseLegacyDRM = container != null && container.isUseLegacyDRM();
+        boolean defaultLaunchRealSteam = container != null && container.isLaunchRealSteam();
+        boolean defaultUseSteamInput = container != null && "1".equals(container.getExtra("useSteamInput", "0"));
+        cbUseLegacyDRM.setChecked(
+                isShortcutMode()
+                        ? "1".equals(shortcut.getExtra("useLegacyDRM", defaultUseLegacyDRM ? "1" : "0"))
+                        : defaultUseLegacyDRM
+        );
+        cbLaunchRealSteam.setChecked(
+                isShortcutMode()
+                        ? "1".equals(shortcut.getExtra("launchRealSteam", defaultLaunchRealSteam ? "1" : "0"))
+                        : defaultLaunchRealSteam
+        );
+        cbUseSteamInput.setChecked(
+                isShortcutMode()
+                        ? "1".equals(shortcut.getExtra("useSteamInput", defaultUseSteamInput ? "1" : "0"))
+                        : defaultUseSteamInput
+        );
+
+        final Spinner sSteamType = view.findViewById(R.id.SSteamType);
+        applyThemedAdapter(sSteamType, R.array.steam_type_entries);
+        String defaultSteamType = container != null ? container.getSteamType() : Container.STEAM_TYPE_NORMAL;
+        if (isShortcutMode()) {
+            defaultSteamType = shortcut.getExtra("steamType", defaultSteamType);
+        }
+        int steamTypeIndex = Container.STEAM_TYPE_ULTRALIGHT.equals(defaultSteamType) ? 2
+                : Container.STEAM_TYPE_LIGHT.equals(defaultSteamType) ? 1 : 0;
+        sSteamType.setSelection(steamTypeIndex);
+
+        final CompoundButton cbForceDlc = view.findViewById(R.id.CBForceDlc);
+        boolean defaultForceDlc = container != null && container.isForceDlc();
+        cbForceDlc.setChecked(
+                isShortcutMode()
+                        ? "1".equals(shortcut.getExtra("forceDlc", defaultForceDlc ? "1" : "0"))
+                        : defaultForceDlc
+        );
+
+        final CompoundButton cbSteamOfflineMode = view.findViewById(R.id.CBSteamOfflineMode);
+        boolean defaultSteamOfflineMode = container != null && container.isSteamOfflineMode();
+        cbSteamOfflineMode.setChecked(
+                isShortcutMode()
+                        ? "1".equals(shortcut.getExtra("steamOfflineMode", defaultSteamOfflineMode ? "1" : "0"))
+                        : defaultSteamOfflineMode
+        );
+
+        final CompoundButton cbUnpackFiles = view.findViewById(R.id.CBUnpackFiles);
+        boolean defaultUnpackFiles = container != null && container.isUnpackFiles();
+        cbUnpackFiles.setChecked(
+                isShortcutMode()
+                        ? "1".equals(shortcut.getExtra("unpackFiles", defaultUnpackFiles ? "1" : "0"))
+                        : defaultUnpackFiles
+        );
+
         // Existing declarations of UI components and variables
         final Runnable showInputWarning = () -> ContentDialog.alert(context, R.string.enable_xinput_and_dinput_same_time, null);
         final CompoundButton cbEnableXInput = view.findViewById(R.id.CBEnableXInput);
@@ -886,6 +962,15 @@ public class ContainerDetailFragment extends Fragment {
                 String lc_all = etLC_ALL.getText().toString();
                 int primaryController = Math.max(0, sPrimaryController.getSelectedItemPosition());
                 String controllerMapping = getControllerMapping(view);
+                boolean useLegacyDRM = cbUseLegacyDRM.isChecked();
+                boolean launchRealSteam = cbLaunchRealSteam.isChecked();
+                boolean useSteamInput = cbUseSteamInput.isChecked();
+                String steamType = sSteamType.getSelectedItemPosition() == 2 ? Container.STEAM_TYPE_ULTRALIGHT
+                        : sSteamType.getSelectedItemPosition() == 1 ? Container.STEAM_TYPE_LIGHT
+                        : Container.STEAM_TYPE_NORMAL;
+                boolean forceDlc = cbForceDlc.isChecked();
+                boolean steamOfflineMode = cbSteamOfflineMode.isChecked();
+                boolean unpackFiles = cbUnpackFiles.isChecked();
 
                 // Define final input type
                 int finalInputType = 0;
@@ -953,11 +1038,14 @@ public class ContainerDetailFragment extends Fragment {
                         if ("CUSTOM".equals(gameSource)) {
                             shortcut.putExtra("custom_exe", selectedExePath[0]);
                         }
-                        rewriteShortcutExecLine(shortcut.file, buildExecCommandForSource(gameSource, shortcutAppId(), shortcutGogId(), shortcut, selectedExePath[0]));
+                        rewriteShortcutExecLine(shortcut.file, buildExecCommandForSource(gameSource, shortcutAppId(), shortcutGogId(), shortcut, selectedExePath[0], launchRealSteam));
                     }
 
                     shortcut.putExtra("customLibraryIconPath", customLibraryIconPath.isEmpty() ? null : customLibraryIconPath);
                     shortcut.putExtra("customCoverArtPath", customLibraryIconPath.isEmpty() ? null : customLibraryIconPath);
+                    if ("STEAM".equals(gameSource)) {
+                        rewriteShortcutExecLine(shortcut.file, buildExecCommandForSource(gameSource, shortcutAppId(), shortcutGogId(), shortcut, selectedExePath[0], launchRealSteam));
+                    }
 
                     if (keepUsingContainerDefaults) {
                         clearShortcutSettingOverrides(shortcut);
@@ -992,18 +1080,37 @@ public class ContainerDetailFragment extends Fragment {
                         shortcut.putExtra("lc_all", lc_all);
                         shortcut.putExtra("primaryController", String.valueOf(primaryController));
                         shortcut.putExtra("controllerMapping", controllerMapping);
+                        if ("STEAM".equals(gameSource)) {
+                            shortcut.putExtra("useLegacyDRM", useLegacyDRM ? "1" : "0");
+                            shortcut.putExtra("launchRealSteam", launchRealSteam ? "1" : "0");
+                            shortcut.putExtra("useSteamInput", useSteamInput ? "1" : "0");
+                            shortcut.putExtra("steamType", steamType);
+                            shortcut.putExtra("forceDlc", forceDlc ? "1" : "0");
+                            shortcut.putExtra("steamOfflineMode", steamOfflineMode ? "1" : "0");
+                            shortcut.putExtra("unpackFiles", unpackFiles ? "1" : "0");
+                        } else {
+                            shortcut.putExtra("useLegacyDRM", null);
+                            shortcut.putExtra("launchRealSteam", null);
+                            shortcut.putExtra("useSteamInput", null);
+                            shortcut.putExtra("steamType", null);
+                            shortcut.putExtra("forceDlc", null);
+                            shortcut.putExtra("steamOfflineMode", null);
+                            shortcut.putExtra("unpackFiles", null);
+                        }
                         shortcut.putExtra(EXTRA_USE_CONTAINER_DEFAULTS, "0");
                     }
                     
                     // Handle container_id override
                     boolean saved = false;
                     if (selectedShortcutContainer != null) {
+                        boolean containerChanged = selectedShortcutContainer.id != shortcut.container.id;
                         shortcut.putExtra("container_id", String.valueOf(selectedShortcutContainer.id));
                         shortcut.putExtra("wineVersion", selectedShortcutContainer.getWineVersion());
+                        shortcut.putExtra("cloud_force_download", containerChanged ? "1" : null);
                         shortcut.saveData();
                         saved = true;
 
-                        if (selectedShortcutContainer.id != shortcut.container.id) {
+                        if (containerChanged) {
                             java.io.File newDesktopDir = selectedShortcutContainer.getDesktopDir();
                             if (!newDesktopDir.exists()) newDesktopDir.mkdirs();
                             java.io.File newShortcutFile = new java.io.File(newDesktopDir, shortcut.file.getName());
@@ -1044,6 +1151,10 @@ public class ContainerDetailFragment extends Fragment {
                     container.setLC_ALL(lc_all);
                     container.setPrimaryController(primaryController);
                     container.setControllerMapping(controllerMapping);
+                    container.setSteamType(steamType);
+                    container.setForceDlc(forceDlc);
+                    container.setSteamOfflineMode(steamOfflineMode);
+                    container.setUnpackFiles(unpackFiles);
                     container.saveData();
                     if (cbExclusiveInput != null) {
                         preferences.edit().putBoolean("xinput_toggle", cbExclusiveInput.isChecked()).apply();
@@ -1074,6 +1185,11 @@ public class ContainerDetailFragment extends Fragment {
                     data.put("fexcoreVersion", fexcoreVersion);
                     data.put("fexcorePreset", fexcorePreset);
                     data.put("desktopTheme", desktopTheme);
+                    if ("STEAM".equals(createShortcutForSource)) {
+                        data.put("useLegacyDRM", useLegacyDRM ? "1" : "0");
+                        data.put("launchRealSteam", launchRealSteam ? "1" : "0");
+                        data.put("useSteamInput", useSteamInput ? "1" : "0");
+                    }
                     String selectedWineStr = sWineVersion.getSelectedItem() != null ? sWineVersion.getSelectedItem().toString() : WineInfo.MAIN_WINE_VERSION.identifier();
                     // Resolve container name to actual wine version
                     String finalWineVersion = selectedWineStr;
@@ -2031,7 +2147,8 @@ public class ContainerDetailFragment extends Fragment {
     private String resolveAbsolutePathFromShortcut(String gameSource, int appId, @Nullable String gogId, @Nullable Shortcut shortcut, @Nullable String shortcutPath) {
         if (shortcutPath == null || shortcutPath.isEmpty()) return "";
 
-        if ("C:\\Program Files (x86)\\Steam\\steamclient_loader_x64.exe".equalsIgnoreCase(shortcutPath)) {
+        if ("C:\\Program Files (x86)\\Steam\\steamclient_loader_x64.exe".equalsIgnoreCase(shortcutPath)
+                || "C:\\Program Files (x86)\\Steam\\steam.exe".equalsIgnoreCase(shortcutPath)) {
             return "";
         }
 
@@ -2108,8 +2225,11 @@ public class ContainerDetailFragment extends Fragment {
         return "";
     }
 
-    private String buildExecCommandForSource(String gameSource, int appId, @Nullable String gogId, @Nullable Shortcut shortcut, @Nullable String selectedExePath) {
+    private String buildExecCommandForSource(String gameSource, int appId, @Nullable String gogId, @Nullable Shortcut shortcut, @Nullable String selectedExePath, boolean launchRealSteam) {
         if ("STEAM".equals(gameSource)) {
+            if (launchRealSteam) {
+                return "wine \"C:\\\\Program Files (x86)\\\\Steam\\\\steam.exe\"";
+            }
             return "wine \"C:\\\\Program Files (x86)\\\\Steam\\\\steamclient_loader_x64.exe\"";
         }
 
@@ -2181,7 +2301,14 @@ public class ContainerDetailFragment extends Fragment {
         content.append("[Desktop Entry]\n");
         content.append("Type=Application\n");
         content.append("Name=").append(createShortcutForAppName).append("\n");
-        String execCommand = buildExecCommandForSource(createShortcutForSource, createShortcutForAppId, createShortcutForGogId, null, data.optString("launchExePath", ""));
+        String execCommand = buildExecCommandForSource(
+                createShortcutForSource,
+                createShortcutForAppId,
+                createShortcutForGogId,
+                null,
+                data.optString("launchExePath", ""),
+                "1".equals(data.optString("launchRealSteam", "0"))
+        );
         content.append("Exec=").append(execCommand).append("\n");
         if (createShortcutForSource.equals("EPIC")) {
             content.append("Icon=epic_icon_").append(createShortcutForAppId).append("\n");

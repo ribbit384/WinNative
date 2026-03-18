@@ -628,19 +628,27 @@ public class WinHandler {
                 socket.bind(new InetSocketAddress((InetAddress) null, SERVER_PORT));
 
                 while (running) {
-                    socket.receive(receivePacket);
+                    try {
+                        socket.receive(receivePacket);
 
-                    synchronized (actions) {
-                        receiveData.rewind();
-                        byte requestCode = receiveData.get();
-                        handleRequest(requestCode, receivePacket.getPort());
+                        synchronized (actions) {
+                            receiveData.rewind();
+                            byte requestCode = receiveData.get();
+                            handleRequest(requestCode, receivePacket.getPort());
+                        }
+                    } catch (Exception e) {
+                        if (running) {
+                            Log.e("WinHandler", "Error processing UDP packet, continuing...", e);
+                        }
                     }
                 }
             } catch (IOException e) {
+                Log.e("WinHandler", "UDP listener failed to start or socket closed", e);
             }
         });
     }
 
+    private int sendGamepadCount = 0;
     public void sendGamepadState() {
         final ControlsProfile profile = activity.getInputControlsView().getProfile();
         final boolean useVirtualGamepad = profile != null && profile.isVirtualGamepad();
@@ -652,28 +660,28 @@ public class WinHandler {
             writeStateToMappedBuffer(state, gamepadBuffer, true, 0);
         }
 
-        // Send via UDP to winhandler.exe (only if connected)
-        if (!initReceived || gamepadClients.isEmpty())
-            return;
-        if (xinputDisabled && !useVirtualGamepad)
-            return;
-
-        for (final int port : gamepadClients) {
-            addAction(() -> {
-                sendData.rewind();
-                sendData.put(RequestCodes.GET_GAMEPAD_STATE);
-                sendData.put((byte) (enabled ? 1 : 0));
-
-                if (enabled) {
-                    sendData.putInt(!useVirtualGamepad ? currentController.getDeviceId() : profile.id);
-                    GamepadState state = useVirtualGamepad ? profile.getGamepadState() : currentController.state;
-                    final boolean remapDinputButtons = useVirtualGamepad && dinputGamepadClients.contains(port);
-                    writeStateToPacket(sendData, state, remapDinputButtons, true);
-                }
-
-                sendPacket(port);
-            });
+        sendGamepadCount++;
+        if (sendGamepadCount % 50 == 0) {
+            GamepadState debugState = (profile != null) ? profile.getGamepadState() : null;
+            Log.d("WinHandler", "sendGamepadState #" + sendGamepadCount +
+                " enabled=" + enabled +
+                " useVirtual=" + useVirtualGamepad +
+                " bufOK=" + (gamepadBuffer != null) +
+                " lx=" + (debugState != null ? debugState.thumbLX : "null") +
+                " ly=" + (debugState != null ? debugState.thumbLY : "null") +
+                " profile=" + (profile != null ? profile.getName() : "null") +
+                " isVGP=" + (profile != null ? profile.isVirtualGamepad() : "noProfile"));
         }
+
+        // UDP gamepad send to winhandler.exe is intentionally DISABLED.
+        // Gamepad data is delivered entirely via shared memory:
+        //   - evshim.c reads gamepad.mem -> SDL virtual joystick -> Wine DirectInput
+        //   - xinput_virtual.dll reads gamepad.mem -> XInput API
+        // Sending gamepad state via UDP to winhandler.exe creates a third conflicting
+        // input source that causes stale/delayed input on ARM64EC, where Wine may
+        // fall back to its builtin XInput which processes winhandler's injected state
+        // instead of xinput_virtual's direct shared memory reads.
+        // This matches the Bionic fork's approach (winhandler ignores gamepad entirely).
     }
 
     /**
@@ -728,14 +736,10 @@ public class WinHandler {
 
         // D-pad as hat byte (bitmask: 1=up, 2=down, 4=left, 8=right)
         byte hat = 0;
-        if (src.isButtonPressed(GamepadState.BUTTON_DPAD_UP))
-            hat |= 1;
-        if (src.isButtonPressed(GamepadState.BUTTON_DPAD_DOWN))
-            hat |= 2;
-        if (src.isButtonPressed(GamepadState.BUTTON_DPAD_LEFT))
-            hat |= 4;
-        if (src.isButtonPressed(GamepadState.BUTTON_DPAD_RIGHT))
-            hat |= 8;
+        if (src.isButtonPressed(GamepadState.BUTTON_DPAD_UP))    hat |= 1;
+        if (src.isButtonPressed(GamepadState.BUTTON_DPAD_DOWN))  hat |= 2;
+        if (src.isButtonPressed(GamepadState.BUTTON_DPAD_LEFT))  hat |= 4;
+        if (src.isButtonPressed(GamepadState.BUTTON_DPAD_RIGHT)) hat |= 8;
         dst.put(hat); // 27
 
         // Padding bytes 28-31 (don't write, rumble at 32-35 is written by evshim)

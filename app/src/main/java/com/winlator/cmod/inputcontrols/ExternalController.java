@@ -277,6 +277,33 @@ public class ExternalController {
         return mappedButton;
     }
 
+    private void applyMappedButtonState(byte originalButton, boolean pressed) {
+        byte mappedButton = getMappedButton(originalButton);
+        if (mappedButton == IDX_BUTTON_L2) {
+            state.triggerL = pressed ? 1.0f : 0.0f;
+            state.setPressed(IDX_BUTTON_L2, pressed);
+        } else if (mappedButton == IDX_BUTTON_R2) {
+            state.triggerR = pressed ? 1.0f : 0.0f;
+            state.setPressed(IDX_BUTTON_R2, pressed);
+        } else {
+            state.setPressed(mappedButton, pressed);
+        }
+    }
+
+    private void applyAnalogTriggerState(byte originalButton, float value) {
+        byte mappedButton = getMappedButton(originalButton);
+        boolean pressed = value > 0.5f;
+        if (mappedButton == IDX_BUTTON_L2) {
+            state.triggerL = Math.max(state.triggerL, value);
+            state.setPressed(IDX_BUTTON_L2, state.triggerL > 0.5f);
+        } else if (mappedButton == IDX_BUTTON_R2) {
+            state.triggerR = Math.max(state.triggerR, value);
+            state.setPressed(IDX_BUTTON_R2, state.triggerR > 0.5f);
+        } else {
+            state.setPressed(mappedButton, pressed);
+        }
+    }
+
     public int getControllerBindingCount() {
         return controllerBindings.size();
     }
@@ -522,18 +549,16 @@ public class ExternalController {
         if (buttonIdx != -1) {
             if (buttonIdx == IDX_BUTTON_L2) {
                 if (triggerType == TRIGGER_IS_BUTTON) {
-                    state.triggerL = pressed ? 1.0f : 0f;
-                    state.setPressed(buttonIdx, pressed);
+                    applyMappedButtonState(IDX_BUTTON_L2, pressed);
                 } else
                     return true;
             } else if (buttonIdx == IDX_BUTTON_R2) {
                 if (triggerType == TRIGGER_IS_BUTTON) {
-                    state.triggerR = pressed ? 1.0f : 0f;
-                    state.setPressed(buttonIdx, pressed);
+                    applyMappedButtonState(IDX_BUTTON_R2, pressed);
                 } else
                     return true;
             } else {
-                state.setPressed(buttonIdx, pressed);
+                applyMappedButtonState((byte) buttonIdx, pressed);
                 Log.d("ExternalController", "Button pressed: idx=" + buttonIdx + " " + pressed);
             }
             return true;
@@ -692,6 +717,9 @@ public class ExternalController {
 
         if (axis == MotionEvent.AXIS_Z || axis == MotionEvent.AXIS_RZ) {
             // Right Stick (No Square Deadzone)
+            if (axis == MotionEvent.AXIS_RZ) {
+                value = -value;
+            }
             value = applyDeadzoneAndSensitivity(value, this.deadzoneRight, this.sensitivityRight);
 
             // Apply inversion

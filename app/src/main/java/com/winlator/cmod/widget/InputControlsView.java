@@ -684,7 +684,13 @@ public class InputControlsView extends View {
     }
 
     public void handleInputEvent(Binding binding, boolean isActionDown) {
-        handleInputEvent(binding, isActionDown, 0);
+        float offset = 0;
+        if (binding == Binding.GAMEPAD_LEFT_THUMB_UP || binding == Binding.GAMEPAD_RIGHT_THUMB_UP || binding == Binding.GAMEPAD_LEFT_THUMB_LEFT || binding == Binding.GAMEPAD_RIGHT_THUMB_LEFT) {
+            offset = -1.0f;
+        } else if (binding == Binding.GAMEPAD_LEFT_THUMB_DOWN || binding == Binding.GAMEPAD_RIGHT_THUMB_DOWN || binding == Binding.GAMEPAD_LEFT_THUMB_RIGHT || binding == Binding.GAMEPAD_RIGHT_THUMB_RIGHT) {
+            offset = 1.0f;
+        }
+        handleInputEvent(binding, isActionDown, offset);
     }
 
     public void handleInputEvent(Binding binding, boolean isActionDown, float offset) {
@@ -706,16 +712,38 @@ public class InputControlsView extends View {
                     state.setPressed(buttonIdx, isActionDown);
             }
             else if (binding == Binding.GAMEPAD_LEFT_THUMB_UP || binding == Binding.GAMEPAD_LEFT_THUMB_DOWN) {
-                state.thumbLY = isActionDown ? offset : 0;
+                if (isActionDown) {
+                    state.thumbLY = offset;
+                } else {
+                    if (binding == Binding.GAMEPAD_LEFT_THUMB_UP && state.thumbLY < 0) state.thumbLY = 0;
+                    else if (binding == Binding.GAMEPAD_LEFT_THUMB_DOWN && state.thumbLY > 0) state.thumbLY = 0;
+                }
+
             }
             else if (binding == Binding.GAMEPAD_LEFT_THUMB_LEFT || binding == Binding.GAMEPAD_LEFT_THUMB_RIGHT) {
-                state.thumbLX = isActionDown ? offset : 0;
+                if (isActionDown) {
+                    state.thumbLX = offset;
+                } else {
+                    if (binding == Binding.GAMEPAD_LEFT_THUMB_LEFT && state.thumbLX < 0) state.thumbLX = 0;
+                    else if (binding == Binding.GAMEPAD_LEFT_THUMB_RIGHT && state.thumbLX > 0) state.thumbLX = 0;
+                }
+
             }
             else if (binding == Binding.GAMEPAD_RIGHT_THUMB_UP || binding == Binding.GAMEPAD_RIGHT_THUMB_DOWN) {
-                state.thumbRY = isActionDown ? offset : 0;
+                if (isActionDown) {
+                    state.thumbRY = offset;
+                } else {
+                    if (binding == Binding.GAMEPAD_RIGHT_THUMB_UP && state.thumbRY < 0) state.thumbRY = 0;
+                    else if (binding == Binding.GAMEPAD_RIGHT_THUMB_DOWN && state.thumbRY > 0) state.thumbRY = 0;
+                }
             }
             else if (binding == Binding.GAMEPAD_RIGHT_THUMB_LEFT || binding == Binding.GAMEPAD_RIGHT_THUMB_RIGHT) {
-                state.thumbRX = isActionDown ? offset : 0;
+                if (isActionDown) {
+                    state.thumbRX = offset;
+                } else {
+                    if (binding == Binding.GAMEPAD_RIGHT_THUMB_LEFT && state.thumbRX < 0) state.thumbRX = 0;
+                    else if (binding == Binding.GAMEPAD_RIGHT_THUMB_RIGHT && state.thumbRX > 0) state.thumbRX = 0;
+                }
             }
             else if (binding == Binding.GAMEPAD_DPAD_UP || binding == Binding.GAMEPAD_DPAD_RIGHT ||
                      binding == Binding.GAMEPAD_DPAD_DOWN || binding == Binding.GAMEPAD_DPAD_LEFT) {

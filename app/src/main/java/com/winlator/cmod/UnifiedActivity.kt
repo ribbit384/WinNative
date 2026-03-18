@@ -4313,8 +4313,11 @@ class UnifiedActivity : ComponentActivity() {
             }
 
             // Initiate Cloud Sync download
+            val accountId = SteamService.userSteamId?.accountID?.toLong()
+                ?: PrefManager.steamUserAccountId.takeIf { it != 0 }?.toLong()
+                ?: 0L
             val prefixToPath: (String) -> String = { prefix ->
-                com.winlator.cmod.steam.enums.PathType.from(prefix).toAbsPath(context, app.id, SteamService.userSteamId?.accountID ?: 0L)
+                com.winlator.cmod.steam.enums.PathType.from(prefix).toAbsPath(context, app.id, accountId)
             }
             SteamService.beginLaunchApp(
                 appId = app.id,

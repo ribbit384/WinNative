@@ -56,7 +56,8 @@ public abstract class WineUtils {
             }
             FileUtils.symlink(path, dosdevicesPath+"/"+drive[0].toLowerCase(Locale.ENGLISH)+":");
 
-            // Track A: drive game directory for Steam symlink creation
+            // Always treat A: as the primary game directory so ColdClientLoader can
+            // resolve steamapps\common\{gameName} to the A: drive for custom paths.
             if (drive[0].equals("A")) {
                 gameDirectoryPath = path;
             }
@@ -191,18 +192,21 @@ public abstract class WineUtils {
 
     /**
      * Copies critical DLLs from the wine installation to the container's system32/syswow64.
-     * This ensures games can find user32.dll, shell32.dll, dinput/xinput DLLs, etc.
+     * This ensures games can find user32.dll, shell32.dll, etc.
+     * Note: dinput/dinput8 are NOT copied here — they use Wine builtins via builtin,native override.
      */
     private static void copyWineDllsToContainer(File rootDir, WineInfo wineInfo) {
-        File wineSystem32Dir = new File(rootDir, "/opt/wine/lib/wine/x86_64-windows");
+        boolean isArm64EC = wineInfo != null && wineInfo.isArm64EC();
+        File wineSystem32Dir = new File(rootDir, isArm64EC
+            ? "/opt/wine/lib/wine/aarch64-windows"
+            : "/opt/wine/lib/wine/x86_64-windows");
         File wineSysWoW64Dir = new File(rootDir, "/opt/wine/lib/wine/i386-windows");
         File containerSystem32Dir = new File(rootDir, ImageFs.WINEPREFIX+"/drive_c/windows/system32");
         File containerSysWoW64Dir = new File(rootDir, ImageFs.WINEPREFIX+"/drive_c/windows/syswow64");
 
         final String[] dlnames = {
-            "user32.dll", "shell32.dll", "dinput.dll", "dinput8.dll",
-            "xinput1_1.dll", "xinput1_2.dll", "xinput1_3.dll", "xinput1_4.dll",
-            "xinput9_1_0.dll", "xinputuap.dll", "winemenubuilder.exe", "explorer.exe"
+            "user32.dll", "shell32.dll",
+            "winemenubuilder.exe", "explorer.exe"
         };
 
         boolean win64 = wineInfo != null && wineInfo.isWin64();

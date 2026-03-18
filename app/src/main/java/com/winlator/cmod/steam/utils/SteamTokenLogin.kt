@@ -1,9 +1,12 @@
 package com.winlator.cmod.steam.utils
 
+import android.annotation.SuppressLint
+import com.auth0.android.jwt.JWT
 import com.winlator.cmod.core.FileUtils
 import com.winlator.cmod.core.TarCompressorUtils
 import com.winlator.cmod.xenvironment.ImageFs
 import com.winlator.cmod.xenvironment.components.GuestProgramLauncherComponent
+import `in`.dragonbra.javasteam.types.KeyValue
 import timber.log.Timber
 import java.io.File
 import java.nio.file.Files
@@ -12,6 +15,7 @@ import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 
 const val NULL_CHAR = '\u0000'
+const val TOKEN_EXPIRE_TIME = 86400L
 
 class SteamTokenLogin(
     private val steamId: String,
@@ -21,6 +25,7 @@ class SteamTokenLogin(
     private val guestProgramLauncherComponent: GuestProgramLauncherComponent? = null,
 ) {
     fun setupSteamFiles() {
+        SteamUtils.autoLoginUserChanges(imageFs)
         phase1SteamConfig()
     }
 
@@ -30,10 +35,36 @@ class SteamTokenLogin(
         return "${crc.value.toString(16)}1"
     }
 
+    private fun execCommand(command: String): String {
+        return guestProgramLauncherComponent?.execShellCommand(command, false)
+            ?: throw IllegalStateException("GuestProgramLauncherComponent is required for command execution")
+    }
+
+    private fun killWineServer() {
+        try {
+            execCommand("wineserver -k")
+        } catch (e: Exception) {
+            Timber.tag("SteamTokenLogin").e("Failed to kill wineserver: ${e.message}")
+        }
+    }
+
+    private fun encryptToken(token: String): String {
+        return execCommand("wine ${imageFs.rootDir}/opt/apps/steam-token.exe encrypt $login $token")
+    }
+
+    private fun decryptToken(vdfValue: String): String {
+        return execCommand("wine ${imageFs.rootDir}/opt/apps/steam-token.exe decrypt $login $vdfValue")
+    }
+
     private fun obfuscateToken(value: String, mtbf: Long): String {
         return SteamTokenHelper.obfuscate(value.toByteArray(), mtbf)
     }
 
+    private fun deobfuscateToken(value: String, mtbf: Long): String {
+        return SteamTokenHelper.deobfuscate(value, mtbf)
+    }
+
+    @SuppressLint("BinaryOperationInTimber")
     private fun createConfigVdf(): String {
         val hdr = hdr()
         val minMTBF = 1000000000L
@@ -49,77 +80,171 @@ class SteamTokenLogin(
             }
         } while (encoded == "")
 
-        Timber.d("SteamTokenLogin: MTBF=$mtbf")
+        Timber.tag("SteamTokenLogin").d("MTBF: $mtbf")
+        Timber.tag("SteamTokenLogin").d("Encoded: $encoded")
 
-        return "\"InstallConfigStore\"\n" +
-                "{\n" +
-                "\t\"Software\"\n" +
-                "\t{\n" +
-                "\t\t\"Valve\"\n" +
-                "\t\t{\n" +
-                "\t\t\t\"Steam\"\n" +
-                "\t\t\t{\n" +
-                "\t\t\t\t\"MTBF\"\t\t\"$mtbf\"\n" +
-                "\t\t\t\t\"ConnectCache\"\n" +
-                "\t\t\t\t{\n" +
-                "\t\t\t\t\t\"$hdr\"\t\t\"$encoded$NULL_CHAR\"\n" +
-                "\t\t\t\t}\n" +
-                "\t\t\t\t\"Accounts\"\n" +
-                "\t\t\t\t{\n" +
-                "\t\t\t\t\t\"$login\"\n" +
-                "\t\t\t\t\t{\n" +
-                "\t\t\t\t\t\t\"SteamID\"\t\t\"$steamId\"\n" +
-                "\t\t\t\t\t}\n" +
-                "\t\t\t\t}\n" +
-                "\t\t\t}\n" +
-                "\t\t}\n" +
-                "\t}\n" +
-                "}\n"
+        return """
+            "InstallConfigStore"
+            {
+                "Software"
+                {
+                    "Valve"
+                    {
+                        "Steam"
+                        {
+                            "MTBF"		"$mtbf"
+                            "ConnectCache"
+                            {
+                                "$hdr"		"$encoded$NULL_CHAR"
+                            }
+                            "Accounts"
+                            {
+                                "$login"
+                                {
+                                    "SteamID"		"$steamId"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        """.trimIndent()
     }
 
-    /**
-     * Phase 1 Steam Config - Write config.vdf with obfuscated refresh token
-     */
+    @SuppressLint("BinaryOperationInTimber")
+    private fun createLocalVdf(): String {
+        val hdr = hdr()
+        val encoded = encryptToken(token)
+
+        return """
+            "MachineUserConfigStore"
+            {
+                "Software"
+                {
+                    "Valve"
+                    {
+                        "Steam"
+                        {
+                            "ConnectCache"
+                            {
+                                "$hdr"		"$encoded"
+                            }
+                        }
+                    }
+                }
+            }
+        """.trimIndent()
+    }
+
     fun phase1SteamConfig() {
-        try {
-            val steamConfigDir = File(imageFs.wineprefix, "drive_c/Program Files (x86)/Steam/config").toPath()
-            Files.createDirectories(steamConfigDir)
+        val steamConfigDir = File(imageFs.wineprefix, "drive_c/Program Files (x86)/Steam/config").toPath()
+        Files.createDirectories(steamConfigDir)
 
-            val configVdfPath = steamConfigDir.resolve("config.vdf")
+        val configVdfPath = steamConfigDir.resolve("config.vdf")
+        var shouldWriteConfig = true
+        var shouldProcessPhase2 = false
 
-            var shouldWriteConfig = true
+        if (Files.exists(configVdfPath)) {
+            val vdfContent = FileUtils.readString(configVdfPath.toFile()) ?: ""
+            if (vdfContent.contains("ConnectCache")) {
+                val vdfData = KeyValue.loadFromString(vdfContent)
+                val mtbf = vdfData?.get("Software")?.get("Valve")?.get("Steam")?.get("MTBF")?.value
+                val connectCacheValue = vdfData?.get("Software")?.get("Valve")?.get("Steam")
+                    ?.get("ConnectCache")?.get(hdr())?.value
 
-            if (Files.exists(configVdfPath)) {
-                val vdfContent = FileUtils.readString(configVdfPath.toFile()) ?: ""
-                if (vdfContent.contains("ConnectCache") && vdfContent.contains("MTBF")) {
-                    // Config already has tokens, skip unless token is empty/changed
-                    if (token.isNotEmpty()) {
-                        // Always refresh to ensure latest token
+                if (mtbf != null && connectCacheValue != null) {
+                    try {
+                        val decodedToken =
+                            deobfuscateToken(connectCacheValue.trimEnd(NULL_CHAR), mtbf.toLong()).trimEnd(NULL_CHAR)
+                        if (JWT(decodedToken).isExpired(TOKEN_EXPIRE_TIME)) {
+                            Timber.tag("SteamTokenLogin").d("Saved JWT expired, overriding config.vdf")
+                            shouldWriteConfig = true
+                        } else {
+                            Timber.tag("SteamTokenLogin").d("Saved JWT is not expired, do not override config.vdf")
+                            shouldWriteConfig = false
+                        }
+                    } catch (_: Exception) {
+                        Timber.tag("SteamTokenLogin").d("Cannot parse saved JWT, overriding config.vdf")
                         shouldWriteConfig = true
-                    } else {
+                    }
+                } else {
+                    if (mtbf == null && connectCacheValue == null) {
+                        Timber.tag("SteamTokenLogin").d("MTBF and ConnectCache not found, overriding config.vdf")
+                        shouldWriteConfig = true
+                    } else if (mtbf != null) {
+                        Timber.tag("SteamTokenLogin").d("MTBF exists but ConnectCache not found, processing phase 2")
                         shouldWriteConfig = false
+                        shouldProcessPhase2 = true
+                    }
+                }
+            } else if (vdfContent.contains("MTBF")) {
+                Timber.tag("SteamTokenLogin").d("MTBF exists but ConnectCache not found, processing phase 2")
+                shouldWriteConfig = false
+                shouldProcessPhase2 = true
+            }
+        }
+
+        if (shouldWriteConfig && token.isNotEmpty()) {
+            Timber.tag("SteamTokenLogin").d("Overriding config.vdf")
+            Files.write(configVdfPath, createConfigVdf().toByteArray())
+
+            FileUtils.chmod(File(steamConfigDir.toFile(), "loginusers.vdf"), 505)
+            FileUtils.chmod(File(steamConfigDir.toFile(), "config.vdf"), 505)
+
+            val localSteamDir = File(imageFs.wineprefix, "drive_c/users/${ImageFs.USER}/AppData/Local/Steam").toPath()
+            localSteamDir.createDirectories()
+            if (localSteamDir.resolve("local.vdf").exists()) {
+                Files.delete(localSteamDir.resolve("local.vdf"))
+            }
+        } else if (shouldProcessPhase2) {
+            if (guestProgramLauncherComponent == null) {
+                Timber.tag("SteamTokenLogin").d("Skipping phase 2 until launcher is ready")
+            } else {
+                phase2LocalConfig()
+            }
+        }
+    }
+
+    fun phase2LocalConfig() {
+        try {
+            val tokenArchive = File(imageFs.rootDir.parentFile, "steam-token.tzst")
+            if (!tokenArchive.exists()) {
+                Timber.tag("SteamTokenLogin").w("steam-token.tzst is missing, cannot process local.vdf")
+                return
+            }
+
+            val extractDir = File(imageFs.rootDir, "opt/apps")
+            Files.createDirectories(extractDir.toPath())
+            TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, tokenArchive, extractDir)
+
+            val localSteamDir = File(imageFs.wineprefix, "drive_c/users/${ImageFs.USER}/AppData/Local/Steam").toPath()
+            Files.createDirectories(localSteamDir)
+
+            if (localSteamDir.resolve("local.vdf").exists()) {
+                val vdfContent = FileUtils.readString(localSteamDir.resolve("local.vdf").toFile()) ?: ""
+                val vdfData = KeyValue.loadFromString(vdfContent)
+                val connectCacheValue = vdfData?.get("Software")?.get("Valve")?.get("Steam")
+                    ?.get("ConnectCache")?.get(hdr())?.value
+                if (connectCacheValue != null) {
+                    try {
+                        val decodedToken = decryptToken(connectCacheValue.trimEnd(NULL_CHAR))
+                        if (!JWT(decodedToken).isExpired(TOKEN_EXPIRE_TIME)) {
+                            Timber.tag("SteamTokenLogin").d("Saved JWT is not expired, do not override local.vdf")
+                            return
+                        }
+                    } catch (e: Exception) {
+                        Timber.tag("SteamTokenLogin").d("An unexpected error occurred: ${e.message}")
                     }
                 }
             }
 
-            if (shouldWriteConfig && token.isNotEmpty()) {
-                Timber.d("SteamTokenLogin: Writing config.vdf with ConnectCache")
-                Files.write(configVdfPath, createConfigVdf().toByteArray())
-
-                // Set permissions
-                FileUtils.chmod(configVdfPath.toFile(), 505)
-
-                // Remove local.vdf if it exists (force phase 1 usage)
-                val localSteamDir = File(imageFs.wineprefix, "drive_c/users/${ImageFs.USER}/AppData/Local/Steam").toPath()
-                localSteamDir.createDirectories()
-                if (localSteamDir.resolve("local.vdf").exists()) {
-                    Files.delete(localSteamDir.resolve("local.vdf"))
-                }
-            } else {
-                Timber.d("SteamTokenLogin: Skipping config.vdf (no token or already configured)")
-            }
+            Timber.tag("SteamTokenLogin").d("Overriding local.vdf")
+            Files.write(localSteamDir.resolve("local.vdf"), createLocalVdf().toByteArray())
+            killWineServer()
+            FileUtils.chmod(File(localSteamDir.toFile(), "local.vdf"), 505)
         } catch (e: Exception) {
-            Timber.w(e, "SteamTokenLogin: Failed to write config.vdf")
+            Timber.tag("SteamTokenLogin").d("An unexpected error occurred: ${e.message}")
+            e.printStackTrace()
         }
     }
 }
