@@ -194,7 +194,24 @@ class UnifiedActivity : ComponentActivity() {
     val libraryFocusIndex = kotlinx.coroutines.flow.MutableStateFlow(0)
     var libraryItemCount: Int = 0
     private var currentLibraryLayoutMode: LibraryLayoutMode = LibraryLayoutMode.GRID_4
-    private var lastLibraryMoveTime = 0L
+
+    // Store grid focus: same pattern for store/steam/epic/gog tabs
+    val storeFocusIndex = kotlinx.coroutines.flow.MutableStateFlow(0)
+    var storeItemCount: Int = 0
+    private var storeColumns: Int = 4
+    // Reference to the active store tab's grid state so we can snap focus to visible area
+    var storeGridState: androidx.compose.foundation.lazy.grid.LazyGridState? = null
+
+    // Single shared gate for ALL navigation inputs (dpad keys, hat axes, joystick)
+    // so that simultaneous events from the same physical input don't cause double moves.
+    private var lastMoveTime = 0L
+    // Tracks whether a d-pad direction is currently held so we can distinguish
+    // a fresh press (fires immediately) from a held repeat (throttled at 250ms).
+    private var dpadHeld = false
+    private var joystickActive = false
+    private companion object {
+        const val MOVE_INTERVAL_MS = 250L
+    }
 
     private fun moveLibraryFocus(left: Boolean, right: Boolean, up: Boolean, down: Boolean) {
         val idx = libraryFocusIndex.value
@@ -218,6 +235,36 @@ class UnifiedActivity : ComponentActivity() {
             }
         }
         libraryFocusIndex.value = newIdx
+    }
+
+    private fun moveStoreFocus(left: Boolean, right: Boolean, up: Boolean, down: Boolean) {
+        val count = storeItemCount
+        if (count <= 0) return
+        val cols = storeColumns
+
+        // If the current focus index is not visible (e.g. user scrolled with right joystick),
+        // snap focus to the top-left of the visible area first.
+        var idx = storeFocusIndex.value
+        val grid = storeGridState
+        if (grid != null) {
+            val visibleItems = grid.layoutInfo.visibleItemsInfo
+            if (visibleItems.isNotEmpty()) {
+                val firstVisible = visibleItems.first().index
+                val lastVisible = visibleItems.last().index
+                if (idx < firstVisible || idx > lastVisible) {
+                    idx = firstVisible
+                    storeFocusIndex.value = idx
+                    return // just snap, don't move further this press
+                }
+            }
+        }
+
+        var newIdx = idx
+        if (left) newIdx = (idx - 1).coerceAtLeast(0)
+        if (right) newIdx = (idx + 1).coerceAtMost(count - 1)
+        if (up) newIdx = (idx - cols).coerceAtLeast(0)
+        if (down) newIdx = (idx + cols).coerceAtMost(count - 1)
+        storeFocusIndex.value = newIdx
     }
 
     private fun gogPseudoId(gameId: String): Int {
@@ -244,23 +291,34 @@ class UnifiedActivity : ComponentActivity() {
             else -> false
         }
 
-        // On library tab, intercept ALL DPAD events so focus can never leave the grid
-        if (currentTabKey == "library") {
-            val isDpad = keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT ||
-                    keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT ||
-                    keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP ||
-                    keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN
-            if (isDpad) {
-                if (action == android.view.KeyEvent.ACTION_DOWN) {
-                    moveLibraryFocus(
-                        left = keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT,
-                        right = keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
-                        up = keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP,
-                        down = keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN
-                    )
-                }
-                return true // consume both DOWN and UP
+        // Intercept DPAD events on all tabs for throttled, grid-aware navigation
+        val isDpad = keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT ||
+                keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT ||
+                keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP ||
+                keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN
+        if (isDpad) {
+            if (action == android.view.KeyEvent.ACTION_UP) {
+                // Release: allow next press to fire immediately
+                dpadHeld = false
+                return true
             }
+            if (action == android.view.KeyEvent.ACTION_DOWN) {
+                val now = android.os.SystemClock.uptimeMillis()
+                // Fresh press fires immediately; held repeat is throttled at 250ms
+                if (!dpadHeld || (now - lastMoveTime >= MOVE_INTERVAL_MS)) {
+                    val left = keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT
+                    val right = keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT
+                    val up = keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP
+                    val down = keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN
+                    when (currentTabKey) {
+                        "library" -> moveLibraryFocus(left, right, up, down)
+                        else -> moveStoreFocus(left, right, up, down)
+                    }
+                    lastMoveTime = now
+                    dpadHeld = true
+                }
+            }
+            return true // consume both DOWN and UP
         }
 
         if (action == android.view.KeyEvent.ACTION_DOWN) {
@@ -307,7 +365,7 @@ class UnifiedActivity : ComponentActivity() {
             val leftX = event.getAxisValue(android.view.MotionEvent.AXIS_X)
             leftStickXState.value = leftX
 
-            // Handle Left Joystick/D-pad to emulate KeyEvents for Compose Focus
+            // Handle Left Joystick/D-pad for grid navigation on all tabs
             val x = event.getAxisValue(android.view.MotionEvent.AXIS_X)
             val y = event.getAxisValue(android.view.MotionEvent.AXIS_Y)
             val hatX = event.getAxisValue(android.view.MotionEvent.AXIS_HAT_X)
@@ -324,56 +382,28 @@ class UnifiedActivity : ComponentActivity() {
             val isHatDown = hatY > 0.5f
 
             val now = event.eventTime
-            
-            // Check if we are on the library tab to restrict movement
-            val isLibraryTab = currentTabKey == "library"
-            val isStoreTab = currentTabKey == "store" || currentTabKey == "steam" || currentTabKey == "epic"
 
-            // LIBRARY TAB: update grid focus index directly (no injectKeyEvent to avoid bypassing interception)
-            if (isLibraryTab) {
-                val count = libraryItemCount
-                if (count > 0) {
-                    if (isHatLeft || isHatRight || isHatUp || isHatDown) {
-                        if (now - lastHatMoveTime > 150) {
-                            moveLibraryFocus(isHatLeft, isHatRight, isHatUp, isHatDown)
-                            lastHatMoveTime = now
-                            return true
-                        }
-                    }
-                    if (isJoystickLeft || isJoystickRight || isJoystickUp || isJoystickDown) {
-                        if (now - lastJoystickMoveTime > 300) {
-                            moveLibraryFocus(isJoystickLeft, isJoystickRight, isJoystickUp, isJoystickDown)
-                            lastJoystickMoveTime = now
-                            return true
-                        }
-                    }
-                }
-            } else {
-                // NON-LIBRARY TABS: D-pad navigates focus
-                if (isHatLeft || isHatRight || isHatUp || isHatDown) {
-                    if (now - lastHatMoveTime > 150) {
-                        if (isHatLeft) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
-                        if (isHatRight) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
-                        if (isHatUp) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_UP)
-                        if (isHatDown) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_DOWN)
-                        lastHatMoveTime = now
-                        return true
-                    }
-                }
+            val anyDirection = isHatLeft || isHatRight || isHatUp || isHatDown ||
+                    isJoystickLeft || isJoystickRight || isJoystickUp || isJoystickDown
 
-                // Left Joystick in Store tabs: 75% slower throttle (2400ms vs normal 600ms)
-                // Non-store tabs: normal 600ms
-                val joystickThrottle = if (isStoreTab) 2400L else 600L
-                if (isJoystickLeft || isJoystickRight || isJoystickUp || isJoystickDown) {
-                    if (now - lastJoystickMoveTime > joystickThrottle) {
-                        if (isJoystickLeft) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
-                        if (isJoystickRight) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
-                        if (isJoystickUp) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_UP)
-                        if (isJoystickDown) injectKeyEvent(android.view.KeyEvent.KEYCODE_DPAD_DOWN)
-                        lastJoystickMoveTime = now
-                        return true
+            if (anyDirection) {
+                if (now - lastMoveTime >= MOVE_INTERVAL_MS) {
+                    val left = isHatLeft || isJoystickLeft
+                    val right = isHatRight || isJoystickRight
+                    val up = isHatUp || isJoystickUp
+                    val down = isHatDown || isJoystickDown
+                    when (currentTabKey) {
+                        "library" -> moveLibraryFocus(left, right, up, down)
+                        else -> moveStoreFocus(left, right, up, down)
                     }
+                    lastMoveTime = now
+                    joystickActive = true
                 }
+                return true
+            } else if (joystickActive) {
+                // Joystick returned to center — reset so next flick fires immediately
+                joystickActive = false
+                lastMoveTime = 0L
             }
         }
         return super.dispatchGenericMotionEvent(event)
@@ -381,8 +411,8 @@ class UnifiedActivity : ComponentActivity() {
 
     private var currentTabKey: String = "library"
 
-    private var lastHatMoveTime = 0L
-    private var lastJoystickMoveTime = 0L
+    // Callback set by the active store tab so the A-button handler can trigger a click on the focused item
+    var storeItemClickCallback: ((Int) -> Unit)? = null
 
     private fun injectKeyEvent(keyCode: Int) {
         window.decorView.rootView.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, keyCode))
@@ -674,6 +704,9 @@ class UnifiedActivity : ComponentActivity() {
                                     launchSteamGame(context, containerManager, steam)
                                 }
                             }
+                        } else if (key != "library" && key != "downloads") {
+                            // Store tabs: trigger click on focused item
+                            storeItemClickCallback?.invoke(storeFocusIndex.value)
                         }
                     }
                     android.view.KeyEvent.KEYCODE_BUTTON_L2 -> {
@@ -756,6 +789,9 @@ class UnifiedActivity : ComponentActivity() {
             ) { padding ->
                 LaunchedEffect(selectedIdx, tabs) {
                     currentTabKey = tabs.getOrNull(selectedIdx)?.key ?: "library"
+                    // Reset store focus when switching tabs
+                    storeFocusIndex.value = 0
+                    storeItemClickCallback = null
                 }
 
                 Box(Modifier.padding(padding).fillMaxSize().background(BgDark)) {
@@ -1075,7 +1111,7 @@ class UnifiedActivity : ComponentActivity() {
                 }
                 if (isControllerConnected) {
                     Spacer(Modifier.width(8.dp))
-                    ControllerBadge(if (isPS) "Options" else "Start")
+                    ControllerBadge(if (isPS) "\u2261" else "Start")
                 }
 
                 // Search Button (disabled on downloads tab)
@@ -1139,7 +1175,7 @@ class UnifiedActivity : ComponentActivity() {
             ) {
                 val isStore = tabs.getOrNull(selectedIdx)?.label?.contains("Store", ignoreCase = true) == true
                 if (isControllerConnected && !isStore) {
-                    ControllerBadge(if (isPS) "Triangle" else "Y")
+                    ControllerBadge(if (isPS) "\u25B3" else "Y")
                     Spacer(Modifier.width(8.dp))
                 }
                 
@@ -1186,7 +1222,7 @@ class UnifiedActivity : ComponentActivity() {
                 }
                 if (isControllerConnected) {
                     Spacer(Modifier.width(8.dp))
-                    ControllerBadge(if (isPS) "Square" else "X")
+                    ControllerBadge(if (isPS) "\u25A1" else "X")
                 }
             }
         }
@@ -2678,6 +2714,25 @@ class UnifiedActivity : ComponentActivity() {
             else epicApps.filter { it.title.contains(searchQuery, ignoreCase = true) }
         }
 
+        // Sync store focus infrastructure
+        LaunchedEffect(displayedApps.size) {
+            activity?.storeItemCount = displayedApps.size
+            val lastIndex = (displayedApps.size - 1).coerceAtLeast(0)
+            if (activity != null && displayedApps.isNotEmpty() && activity.storeFocusIndex.value > lastIndex) {
+                activity.storeFocusIndex.value = lastIndex
+            }
+        }
+        DisposableEffect(displayedApps) {
+            activity?.storeItemClickCallback = { idx ->
+                displayedApps.getOrNull(idx)?.let { selectedAppId.value = it.id }
+            }
+            activity?.storeGridState = gridState
+            onDispose {
+                activity?.storeItemClickCallback = null
+                activity?.storeGridState = null
+            }
+        }
+
         if (layoutMode == LibraryLayoutMode.LIST) {
             val listViewState = rememberLazyListState()
             JoystickListScroll(listViewState, activity?.rightStickScrollState)
@@ -2690,14 +2745,28 @@ class UnifiedActivity : ComponentActivity() {
                 EpicStoreCapsule(app, listMode = true) { selectedAppId.value = app.id }
             }
         } else {
+            val focusIndex by (activity?.storeFocusIndex ?: kotlinx.coroutines.flow.MutableStateFlow(0)).collectAsState()
+            val focusRequesters = remember(displayedApps.size) {
+                List(displayedApps.size) { FocusRequester() }
+            }
+            LaunchedEffect(focusIndex, focusRequesters.size) {
+                if (focusRequesters.isNotEmpty() && focusIndex in focusRequesters.indices) {
+                    gridState.animateScrollToItem(focusIndex)
+                    try { focusRequesters[focusIndex].requestFocus() } catch (_: Exception) {}
+                }
+            }
             JoystickGridScroll(gridState, activity?.rightStickScrollState)
             FourByTwoGridView(
                 items = displayedApps,
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
                 gridState = gridState,
-            ) { app, _, rowHeight ->
-                Box(Modifier.height(rowHeight)) {
-                    EpicStoreCapsule(app) { selectedAppId.value = app.id }
+            ) { app, index, rowHeight ->
+                Box(Modifier.height(rowHeight).then(
+                    if (index in focusRequesters.indices)
+                        Modifier.focusRequester(focusRequesters[index])
+                    else Modifier
+                )) {
+                    EpicStoreCapsule(app, isFocusedOverride = index == focusIndex) { selectedAppId.value = app.id }
                 }
             }
         }
@@ -2712,9 +2781,10 @@ class UnifiedActivity : ComponentActivity() {
     }
 
     @Composable
-    fun EpicStoreCapsule(app: com.winlator.cmod.epic.data.EpicGame, listMode: Boolean = false, onClick: () -> Unit) {
+    fun EpicStoreCapsule(app: com.winlator.cmod.epic.data.EpicGame, listMode: Boolean = false, isFocusedOverride: Boolean = false, onClick: () -> Unit) {
         val context = LocalContext.current
         var isFocused by remember { mutableStateOf(false) }
+        val effectiveFocus = isFocusedOverride || isFocused
         val isInstalled = app.installPath != null && java.io.File(app.installPath!!).exists()
         val imageUrl = app.primaryImageUrl ?: app.iconUrl
 
@@ -2771,7 +2841,7 @@ class UnifiedActivity : ComponentActivity() {
                 modifier = Modifier
                     .fillMaxSize()
                     .border(1.dp, CardDark, RoundedCornerShape(16.dp))
-                    .chasingBorder(isFocused = isFocused, cornerRadius = 16.dp)
+                    .chasingBorder(isFocused = effectiveFocus, cornerRadius = 16.dp)
                     .background(CardDark, RoundedCornerShape(16.dp))
                     .onFocusChanged { isFocused = it.isFocused }
                     .focusable()
@@ -2802,7 +2872,7 @@ class UnifiedActivity : ComponentActivity() {
                 Text(
                     app.title,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp).fillMaxWidth()
-                        .then(if (isFocused) Modifier.basicMarquee(iterations = Int.MAX_VALUE) else Modifier),
+                        .then(if (effectiveFocus) Modifier.basicMarquee(iterations = Int.MAX_VALUE) else Modifier),
                     style = MaterialTheme.typography.bodySmall,
                     color = TextPrimary,
                     maxLines = 1,
@@ -3131,10 +3201,30 @@ class UnifiedActivity : ComponentActivity() {
         val gogApps by db.gogGameDao().getAll().collectAsState(initial = emptyList())
         val selectedGameId = remember { mutableStateOf<String?>(null) }
         val gridState = rememberLazyGridState()
+        val activity = LocalContext.current as? UnifiedActivity
 
         val displayedApps = remember(gogApps, searchQuery) {
             if (searchQuery.isBlank()) gogApps
             else gogApps.filter { it.title.contains(searchQuery, ignoreCase = true) }
+        }
+
+        // Sync store focus infrastructure
+        LaunchedEffect(displayedApps.size) {
+            activity?.storeItemCount = displayedApps.size
+            val lastIndex = (displayedApps.size - 1).coerceAtLeast(0)
+            if (activity != null && displayedApps.isNotEmpty() && activity.storeFocusIndex.value > lastIndex) {
+                activity.storeFocusIndex.value = lastIndex
+            }
+        }
+        DisposableEffect(displayedApps) {
+            activity?.storeItemClickCallback = { idx ->
+                displayedApps.getOrNull(idx)?.let { selectedGameId.value = it.id }
+            }
+            activity?.storeGridState = gridState
+            onDispose {
+                activity?.storeItemClickCallback = null
+                activity?.storeGridState = null
+            }
         }
 
         if (layoutMode == LibraryLayoutMode.LIST) {
@@ -3194,18 +3284,35 @@ class UnifiedActivity : ComponentActivity() {
                 }
             }
         } else {
+            val focusIndex by (activity?.storeFocusIndex ?: kotlinx.coroutines.flow.MutableStateFlow(0)).collectAsState()
+            val focusRequesters = remember(displayedApps.size) {
+                List(displayedApps.size) { FocusRequester() }
+            }
+            LaunchedEffect(focusIndex, focusRequesters.size) {
+                if (focusRequesters.isNotEmpty() && focusIndex in focusRequesters.indices) {
+                    gridState.animateScrollToItem(focusIndex)
+                    try { focusRequesters[focusIndex].requestFocus() } catch (_: Exception) {}
+                }
+            }
             FourByTwoGridView(
                 items = displayedApps,
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
                 gridState = gridState,
-            ) { app, _, rowHeight ->
+            ) { app, index, rowHeight ->
                 val isInstalled = app.isInstalled && java.io.File(app.installPath).exists()
+                val isItemFocused = index == focusIndex
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(rowHeight)
+                        .then(
+                            if (index in focusRequesters.indices)
+                                Modifier.focusRequester(focusRequesters[index])
+                            else Modifier
+                        )
                         .border(1.dp, CardDark, RoundedCornerShape(16.dp))
+                        .chasingBorder(isFocused = isItemFocused, cornerRadius = 16.dp)
                         .background(CardDark, RoundedCornerShape(16.dp))
                         .clickable { selectedGameId.value = app.id }
                 ) {
@@ -3397,6 +3504,26 @@ class UnifiedActivity : ComponentActivity() {
             else steamApps.filter { it.name.contains(searchQuery, ignoreCase = true) }
         }
 
+        // Sync store focus infrastructure
+        LaunchedEffect(displayedApps.size) {
+            activity?.storeItemCount = displayedApps.size
+            val lastIndex = (displayedApps.size - 1).coerceAtLeast(0)
+            if (activity != null && displayedApps.isNotEmpty() && activity.storeFocusIndex.value > lastIndex) {
+                activity.storeFocusIndex.value = lastIndex
+            }
+        }
+        // Register A-button click callback and grid state for visible-area snapping
+        DisposableEffect(displayedApps) {
+            activity?.storeItemClickCallback = { idx ->
+                displayedApps.getOrNull(idx)?.let { selectedAppForDialog = it }
+            }
+            activity?.storeGridState = gridState
+            onDispose {
+                activity?.storeItemClickCallback = null
+                activity?.storeGridState = null
+            }
+        }
+
         if (layoutMode == LibraryLayoutMode.LIST) {
             val listViewState = rememberLazyListState()
             JoystickListScroll(listViewState, activity?.rightStickScrollState, minSpeed = 2.5f, maxSpeed = 16f, quadratic = true)
@@ -3409,6 +3536,16 @@ class UnifiedActivity : ComponentActivity() {
                 SteamStoreCapsule(app, listMode = true, onClick = { selectedAppForDialog = app })
             }
         } else {
+            val focusIndex by (activity?.storeFocusIndex ?: kotlinx.coroutines.flow.MutableStateFlow(0)).collectAsState()
+            val focusRequesters = remember(displayedApps.size) {
+                List(displayedApps.size) { FocusRequester() }
+            }
+            LaunchedEffect(focusIndex, focusRequesters.size) {
+                if (focusRequesters.isNotEmpty() && focusIndex in focusRequesters.indices) {
+                    gridState.animateScrollToItem(focusIndex)
+                    try { focusRequesters[focusIndex].requestFocus() } catch (_: Exception) {}
+                }
+            }
             // Right joystick: 2x faster at full push with quadratic speed curve
             JoystickGridScroll(gridState, activity?.rightStickScrollState, minSpeed = 2.5f, maxSpeed = 16f, quadratic = true)
             // Left joystick: 75% slower scrolling (vertical only, for browsing store)
@@ -3417,9 +3554,13 @@ class UnifiedActivity : ComponentActivity() {
                 items = displayedApps,
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
                 gridState = gridState,
-            ) { app, _, rowHeight ->
-                Box(Modifier.height(rowHeight)) {
-                    SteamStoreCapsule(app, onClick = { selectedAppForDialog = app })
+            ) { app, index, rowHeight ->
+                Box(Modifier.height(rowHeight).then(
+                    if (index in focusRequesters.indices)
+                        Modifier.focusRequester(focusRequesters[index])
+                    else Modifier
+                )) {
+                    SteamStoreCapsule(app, isFocusedOverride = index == focusIndex, onClick = { selectedAppForDialog = app })
                 }
             }
         }
@@ -3433,10 +3574,11 @@ class UnifiedActivity : ComponentActivity() {
     }
 
     @Composable
-    fun SteamStoreCapsule(app: SteamApp, listMode: Boolean = false, onClick: () -> Unit) {
+    fun SteamStoreCapsule(app: SteamApp, listMode: Boolean = false, isFocusedOverride: Boolean = false, onClick: () -> Unit) {
         val isInstalled = SteamService.isAppInstalled(app.id)
         val context = LocalContext.current
         var isFocused by remember { mutableStateOf(false) }
+        val effectiveFocus = isFocusedOverride || isFocused
 
         if (listMode) {
             Box(
@@ -3510,7 +3652,7 @@ class UnifiedActivity : ComponentActivity() {
                 modifier = Modifier
                     .fillMaxSize()
                     .border(1.dp, CardDark, RoundedCornerShape(16.dp))
-                    .chasingBorder(isFocused = isFocused, cornerRadius = 16.dp)
+                    .chasingBorder(isFocused = effectiveFocus, cornerRadius = 16.dp)
                     .background(CardDark, RoundedCornerShape(16.dp))
                     .onFocusChanged { isFocused = it.isFocused }
                     .focusable()
@@ -3544,7 +3686,7 @@ class UnifiedActivity : ComponentActivity() {
                 Text(
                     text = app.name,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp)
-                        .then(if (isFocused) Modifier.basicMarquee(iterations = Int.MAX_VALUE) else Modifier),
+                        .then(if (effectiveFocus) Modifier.basicMarquee(iterations = Int.MAX_VALUE) else Modifier),
                     style = MaterialTheme.typography.bodySmall,
                     color = TextPrimary,
                     maxLines = 1,
@@ -3925,7 +4067,7 @@ class UnifiedActivity : ComponentActivity() {
                 }
                 if (ControllerHelper.isControllerConnected()) {
                     Spacer(Modifier.width(8.dp))
-                    ControllerBadge(if (ControllerHelper.isPlayStationController()) "Cross" else "A")
+                    ControllerBadge(if (ControllerHelper.isPlayStationController()) "\u2715" else "A")
                 }
             }
         }
@@ -5451,16 +5593,18 @@ class UnifiedActivity : ComponentActivity() {
 fun ControllerBadge(text: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .background(Color(0xFF30363D), RoundedCornerShape(12.dp))
-            .border(1.dp, Color(0xFF8B949E).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 8.dp, vertical = 2.dp),
+            .defaultMinSize(minHeight = 22.dp)
+            .background(Color(0xFF30363D), RoundedCornerShape(15.dp))
+            .border(1.dp, Color(0xFF8B949E).copy(alpha = 0.5f), RoundedCornerShape(15.dp))
+            .padding(horizontal = 10.dp, vertical = 3.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
             color = Color(0xFFE6EDF3),
-            fontSize = 10.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
+            lineHeight = 15.sp,
             style = MaterialTheme.typography.labelSmall
         )
     }

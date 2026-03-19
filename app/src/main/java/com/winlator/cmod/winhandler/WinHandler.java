@@ -80,6 +80,10 @@ public class WinHandler {
     public static final int MAX_PLAYERS = 4;
     private MappedByteBuffer gamepadBuffer; // P1
     private final MappedByteBuffer[] extraGamepadBuffers = new MappedByteBuffer[MAX_PLAYERS - 1]; // P2-P4
+    private RandomAccessFile gamepadFile; // P1
+    private final RandomAccessFile[] extraGamepadFiles = new RandomAccessFile[MAX_PLAYERS - 1]; // P2-P4
+    private final byte[] gamepadWriteBuffer = new byte[64];
+    private final ByteBuffer gamepadNioBuffer = ByteBuffer.wrap(gamepadWriteBuffer).order(ByteOrder.LITTLE_ENDIAN);
     private final ExternalController[] extraControllers = new ExternalController[MAX_PLAYERS - 1];
     private ControllerManager controllerManager;
 

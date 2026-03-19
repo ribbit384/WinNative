@@ -73,24 +73,27 @@ public class ExternalControllerBinding {
         }
     }
 
-//    public static int getKeyCodeForAxis(int axis, byte sign) {
-//        switch (axis) {
-//            case MotionEvent.AXIS_X:
-//                return sign > 0 ? AXIS_X_POSITIVE : AXIS_X_NEGATIVE;
-//            case MotionEvent.AXIS_Y:
-//                return sign > 0 ? AXIS_Y_NEGATIVE : AXIS_Y_POSITIVE;
-//            case MotionEvent.AXIS_Z:
-//                return sign > 0 ? AXIS_Z_POSITIVE : AXIS_Z_NEGATIVE;
-//            case MotionEvent.AXIS_RZ:
-//                return sign > 0 ? AXIS_RZ_NEGATIVE : AXIS_RZ_POSITIVE;
-//            case MotionEvent.AXIS_HAT_X:
-//                return sign > 0 ? KeyEvent.KEYCODE_DPAD_RIGHT : KeyEvent.KEYCODE_DPAD_LEFT;
-//            case MotionEvent.AXIS_HAT_Y:
-//                return sign > 0 ? KeyEvent.KEYCODE_DPAD_DOWN : KeyEvent.KEYCODE_DPAD_UP;
-//            default:
-//                return KeyEvent.KEYCODE_UNKNOWN;
-//        }
-//    }
+    /**
+     * Returns a compact PlayStation-style label for the given Xbox-style button label.
+     * Uses Unicode symbols for face buttons and compact text for others.
+     */
+    public static String getPlayStationLabel(String xboxLabel) {
+        switch (xboxLabel) {
+            case "BUTTON A": return "\u2715";      // Cross (✕)
+            case "BUTTON B": return "\u25CB";      // Circle (○)
+            case "BUTTON X": return "\u25A1";      // Square (□)
+            case "BUTTON Y": return "\u25B3";      // Triangle (△)
+            case "BUTTON SELECT": return "Share";
+            case "BUTTON START": return "\u2261";  // Options (≡)
+            case "BUTTON L1": return "L1";
+            case "BUTTON R1": return "R1";
+            case "BUTTON L2": return "L2";
+            case "BUTTON R2": return "R2";
+            case "BUTTON THUMBL": return "L3";
+            case "BUTTON THUMBR": return "R3";
+            default: return xboxLabel;
+        }
+    }
 
     public static int getKeyCodeForAxis(int axis, byte sign) {
         switch (axis) {

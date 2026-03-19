@@ -278,6 +278,44 @@ class ContentsFragment : Fragment() {
                     AppUtils.showToast(requireContext(), completionMessage)
                     manager.syncContents()
                     selectContentType(profile.type)
+
+                    // Automatically create a container if it's Wine or Proton
+                    if (profile.type == ContentProfile.ContentType.CONTENT_TYPE_WINE || profile.type == ContentProfile.ContentType.CONTENT_TYPE_PROTON) {
+                        val containerManager = com.winlator.cmod.container.ContainerManager(requireContext())
+                        
+                        // Clean up the container name
+                        var desiredName = profile.verName
+                            .replace("winlator", "", ignoreCase = true)
+                            .replace("wine", "", ignoreCase = true)
+                            .replace(Regex("[^a-zA-Z0-9.\\-]"), " ")
+                            .trim()
+                            .replace(Regex("\\s+"), " ")
+                        
+                        if (desiredName.isEmpty()) desiredName = "Container"
+                        
+                        // Ensure unique name
+                        var uniqueName = desiredName
+                        var counter = 2
+                        while (containerManager.containers.any { it.name.equals(uniqueName, ignoreCase = true) }) {
+                            uniqueName = "$desiredName $counter"
+                            counter++
+                        }
+
+                        val data = org.json.JSONObject().apply {
+                            put("name", uniqueName)
+                            put("wineVersion", ContentsManager.getEntryName(profile))
+                        }
+
+                        val preloaderDialog = com.winlator.cmod.core.PreloaderDialog(activity)
+                        preloaderDialog.show(R.string.creating_container)
+                        
+                        containerManager.createContainerAsync(data, manager) { newContainer ->
+                            preloaderDialog.close()
+                            if (newContainer != null) {
+                                AppUtils.showToast(requireContext(), "Created container: $uniqueName")
+                            }
+                        }
+                    }
                 }
             }
         }

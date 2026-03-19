@@ -1821,6 +1821,7 @@ public class ContainerDetailFragment extends Fragment {
         // only lock it when editing a container directly 
         sWineVersion.setEnabled(!isEditMode() || isShortcutMode());
 //
+        final boolean[] isInitialWineSelection = {true};
         sWineVersion.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View v, int position, long id) {
@@ -1832,6 +1833,7 @@ public class ContainerDetailFragment extends Fragment {
                 
                 String selectedWineStr = sWineVersion.getSelectedItem() != null ? sWineVersion.getSelectedItem().toString() : WineInfo.MAIN_WINE_VERSION.identifier();
                 
+                Container selectedContainer = null;
                 // In shortcut/per-game mode, the spinner shows "Container: Name" instead of wine version IDs.
                 // We need to resolve the actual container's wine version to correctly detect ARM64EC.
                 if (selectedWineStr.startsWith("Container: ")) {
@@ -1839,6 +1841,7 @@ public class ContainerDetailFragment extends Fragment {
                     for (Container c : manager.getContainers()) {
                         if (c.getName().equals(containerName)) {
                             selectedWineStr = c.getWineVersion();
+                            selectedContainer = c;
                             Log.d(TAG, "Resolved container '" + containerName + "' to wine version: " + selectedWineStr);
                             break;
                         }
@@ -1869,13 +1872,20 @@ public class ContainerDetailFragment extends Fragment {
                 updateEmulatorFrames(view, sEmulator, sEmulator64);
                 loadBox64VersionSpinner(context, container, contentsManager, sBox64Version, wineInfo.isArm64EC());
                 // Re-apply shortcut's box64Version override if in shortcut mode
-                if (isShortcutMode() && shortcut != null) {
+                if (isShortcutMode() && shortcut != null && isInitialWineSelection[0]) {
                     String shortcutBox64 = shortcut.getExtra("box64Version", "");
                     if (!shortcutBox64.isEmpty()) {
                         AppUtils.setSpinnerSelectionFromValue(sBox64Version, shortcutBox64);
                     }
                 }
                 setupDXWrapperSpinner(sDXWrapper, vDXWrapperConfig, wineInfo.isArm64EC());
+
+                // Update full UI if the user actively swapped the container
+                if (!isInitialWineSelection[0] && selectedContainer != null && isShortcutMode()) {
+                    updateUIWithContainerSettings(view, selectedContainer);
+                }
+
+                isInitialWineSelection[0] = false;
             }
             @Override
             public void onNothingSelected(AdapterView<?> parent) {
@@ -2004,6 +2014,88 @@ public class ContainerDetailFragment extends Fragment {
         // Set the adapter with the combined list
         spinner.setAdapter(createThemedAdapter(context, itemList));
         applyPopupBackground(spinner);
+    }
+
+    private void updateUIWithContainerSettings(View view, Container c) {
+        Spinner sScreenSize = view.findViewById(R.id.SScreenSize);
+        if (sScreenSize != null) AppUtils.setSpinnerSelectionFromValue(sScreenSize, c.getScreenSize());
+
+        Spinner sGraphicsDriver = view.findViewById(R.id.SGraphicsDriver);
+        if (sGraphicsDriver != null) AppUtils.setSpinnerSelectionFromIdentifier(sGraphicsDriver, c.getGraphicsDriver());
+
+        Spinner sDXWrapper = view.findViewById(R.id.SDXWrapper);
+        if (sDXWrapper != null) AppUtils.setSpinnerSelectionFromIdentifier(sDXWrapper, c.getDXWrapper());
+
+        View vDXWrapperConfig = view.findViewById(R.id.BTDXWrapperConfig);
+        if (vDXWrapperConfig != null) vDXWrapperConfig.setTag(c.getDXWrapperConfig());
+
+        View vGraphicsDriverConfig = view.findViewById(R.id.BTGraphicsDriverConfig);
+        if (vGraphicsDriverConfig != null) vGraphicsDriverConfig.setTag(c.getGraphicsDriverConfig());
+
+        Spinner sAudioDriver = view.findViewById(R.id.SAudioDriver);
+        if (sAudioDriver != null) AppUtils.setSpinnerSelectionFromIdentifier(sAudioDriver, c.getAudioDriver());
+
+        Spinner sBox64Version = view.findViewById(R.id.SBox64Version);
+        if (sBox64Version != null) AppUtils.setSpinnerSelectionFromValue(sBox64Version, c.getBox64Version());
+        
+        Spinner sFEXCoreVersion = view.findViewById(R.id.SFEXCoreVersion);
+        if (sFEXCoreVersion != null) AppUtils.setSpinnerSelectionFromValue(sFEXCoreVersion, c.getFEXCoreVersion());
+
+        Spinner sBox64Preset = view.findViewById(R.id.SBox64Preset);
+        if (sBox64Preset != null) AppUtils.setSpinnerSelectionFromIdentifier(sBox64Preset, c.getBox64Preset());
+
+        Spinner sFEXCorePreset = view.findViewById(R.id.SFEXCorePreset);
+        if (sFEXCorePreset != null) AppUtils.setSpinnerSelectionFromIdentifier(sFEXCorePreset, c.getFEXCorePreset());
+
+        Spinner sEmulator = view.findViewById(R.id.SEmulator);
+        if (sEmulator != null) AppUtils.setSpinnerSelectionFromIdentifier(sEmulator, c.getEmulator());
+
+        Spinner sEmulator64 = view.findViewById(R.id.SEmulator64);
+        if (sEmulator64 != null) AppUtils.setSpinnerSelectionFromIdentifier(sEmulator64, c.getEmulator64());
+
+        CompoundButton cbShowFPS = view.findViewById(R.id.CBShowFPS);
+        if (cbShowFPS != null) cbShowFPS.setChecked(c.isShowFPS());
+
+        CompoundButton cbFullscreenStretched = view.findViewById(R.id.CBFullscreenStretched);
+        if (cbFullscreenStretched != null) cbFullscreenStretched.setChecked(c.isFullscreenStretched());
+
+        CompoundButton cbLaunchRealSteam = view.findViewById(R.id.CBLaunchRealSteam);
+        if (cbLaunchRealSteam != null) cbLaunchRealSteam.setChecked(c.isLaunchRealSteam());
+
+        CompoundButton cbUseLegacyDRM = view.findViewById(R.id.CBUseLegacyDRM);
+        if (cbUseLegacyDRM != null) cbUseLegacyDRM.setChecked(c.isUseLegacyDRM());
+
+        CompoundButton cbUseSteamInput = view.findViewById(R.id.CBUseSteamInput);
+        if (cbUseSteamInput != null) cbUseSteamInput.setChecked("1".equals(c.getExtra("useSteamInput", "0")));
+
+        Spinner sSteamType = view.findViewById(R.id.SSteamType);
+        if (sSteamType != null) {
+            String st = c.getSteamType();
+            int stIdx = Container.STEAM_TYPE_ULTRALIGHT.equals(st) ? 2 : Container.STEAM_TYPE_LIGHT.equals(st) ? 1 : 0;
+            sSteamType.setSelection(stIdx);
+        }
+
+        CompoundButton cbForceDlc = view.findViewById(R.id.CBForceDlc);
+        if (cbForceDlc != null) cbForceDlc.setChecked(c.isForceDlc());
+
+        CompoundButton cbSteamOfflineMode = view.findViewById(R.id.CBSteamOfflineMode);
+        if (cbSteamOfflineMode != null) cbSteamOfflineMode.setChecked(c.isSteamOfflineMode());
+
+        CompoundButton cbUnpackFiles = view.findViewById(R.id.CBUnpackFiles);
+        if (cbUnpackFiles != null) cbUnpackFiles.setChecked(c.isUnpackFiles());
+
+        EnvVarsView envVarsView = view.findViewById(R.id.EnvVarsView);
+        if (envVarsView != null) envVarsView.setEnvVars(new EnvVars(c.getEnvVars()));
+
+        // Update wincomponents by removing old views and re-adding
+        ViewGroup tabView = view.findViewById(R.id.LLTabWinComponents);
+        if (tabView != null) {
+            ViewGroup directxSectionView = tabView.findViewById(R.id.LLWinComponentsDirectX);
+            ViewGroup generalSectionView = tabView.findViewById(R.id.LLWinComponentsGeneral);
+            if (directxSectionView != null) directxSectionView.removeAllViews();
+            if (generalSectionView != null) generalSectionView.removeAllViews();
+            createWinComponentsTab(view, c.getWinComponents());
+        }
     }
 
     public static void loadBox64VersionSpinner(Context context, Container container, ContentsManager manager, Spinner spinner, boolean isArm64EC) {

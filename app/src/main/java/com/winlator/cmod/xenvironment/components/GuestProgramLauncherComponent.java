@@ -446,9 +446,6 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
             }
             envVars.put("EVSHIM_MAX_PLAYERS", String.valueOf(MAX_PLAYERS));
             envVars.put("EVSHIM_DATA_PATH", tmpPath);
-            // Wine's Z: drive maps to imagefs root (container/../..), so tmp/ is Z:\tmp.
-            // xinput_virtual.dll reads EVSHIM_WIN_PATH for a Wine-resolvable path since
-            // EVSHIM_DATA_PATH is an absolute Linux path that resolves incorrectly under Z:.
             envVars.put("EVSHIM_WIN_PATH", "Z:\\tmp");
         } else {
             Log.d("GuestProgramLauncher", "EVSHIM disabled for compatibility mode");

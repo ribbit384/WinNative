@@ -213,6 +213,41 @@ public class XServerDisplayActivity extends AppCompatActivity {
     private GuestProgramLauncherComponent guestProgramLauncherComponent;
     private EnvVars overrideEnvVars;
 
+    // Auto-switch controller profile support
+    private android.hardware.input.InputManager inputDeviceManager;
+    private Runnable controllerAutoSwitchRunnable;
+    private final android.hardware.input.InputManager.InputDeviceListener inputDeviceListener =
+            new android.hardware.input.InputManager.InputDeviceListener() {
+        @Override
+        public void onInputDeviceAdded(int deviceId) {
+            android.view.InputDevice device = android.view.InputDevice.getDevice(deviceId);
+            if (device != null && ExternalController.isGameController(device)) {
+                Log.d("XServerDisplayActivity", "Physical controller connected: " + device.getName());
+                runOnUiThread(() -> hideInputControls());
+            }
+        }
+
+        @Override
+        public void onInputDeviceRemoved(int deviceId) {
+            // Check if any physical controllers remain
+            boolean anyControllerLeft = !ExternalController.getControllers().isEmpty();
+            if (!anyControllerLeft) {
+                Log.d("XServerDisplayActivity", "Last physical controller disconnected, switching to Virtual Gamepad");
+                runOnUiThread(() -> {
+                    ControlsProfile virtualProfile = findFirstVirtualProfile();
+                    if (virtualProfile != null) {
+                        showInputControls(virtualProfile);
+                    }
+                });
+            }
+        }
+
+        @Override
+        public void onInputDeviceChanged(int deviceId) {
+            // No action needed
+        }
+    };
+
     private void createNotifcationChannel() {
         String name = "Winlator";
         String description = "Winlator XServer Messages";
@@ -361,6 +396,11 @@ public class XServerDisplayActivity extends AppCompatActivity {
 
         // Initialize handler for periodic saving
         handler = new Handler(Looper.getMainLooper());
+
+        // Register input device listener for controller connect/disconnect auto-switch
+        inputDeviceManager = (android.hardware.input.InputManager) getSystemService(android.content.Context.INPUT_SERVICE);
+        inputDeviceManager.registerInputDeviceListener(inputDeviceListener, handler);
+
         savePlaytimeRunnable = new Runnable() {
             @Override
             public void run() {
@@ -1308,6 +1348,12 @@ public class XServerDisplayActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (inputDeviceManager != null) {
+            inputDeviceManager.unregisterInputDeviceListener(inputDeviceListener);
+        }
+        if (handler != null && controllerAutoSwitchRunnable != null) {
+            handler.removeCallbacks(controllerAutoSwitchRunnable);
+        }
     }
 
     @Override
@@ -1516,6 +1562,26 @@ public class XServerDisplayActivity extends AppCompatActivity {
             containerDataChanged = true;
         }
 
+        // ARM64EC: deploy custom xinput DLLs that read directly from shared memory.
+        // Proton's winebus doesn't pass SDL virtual joystick AXES to builtin xinput
+        // (only buttons/d-pad work through that path), so xinput_virtual.dll is required.
+        if (wineInfo != null && wineInfo.isArm64EC()) {
+            File windowsDir = new File(imageFs.getRootDir(), ImageFs.WINEPREFIX+"/drive_c/windows");
+            if (!container.getExtra("xinput_virtual_deployed", "").equals("10") || firstTimeBoot) {
+                TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "wincomponents/xinput_virtual_arm64ec.tzst", windowsDir);
+                File userRegFile = new File(imageFs.getRootDir(), ImageFs.WINEPREFIX+"/user.reg");
+                try (WineRegistryEditor registryEditor = new WineRegistryEditor(userRegFile)) {
+                    String[] xinputLibs = {"xinput1_1", "xinput1_2", "xinput1_3", "xinput1_4", "xinput9_1_0", "xinputuap"};
+                    for (String name : xinputLibs) {
+                        registryEditor.setStringValue("Software\\Wine\\DllOverrides", name, "native,builtin");
+                    }
+                }
+                container.putExtra("xinput_virtual_deployed", "10");
+                containerDataChanged = true;
+                Log.d("XServerDisplayActivity", "Deployed xinput_virtual DLLs (native,builtin) for ARM64EC");
+            }
+        }
+
         // Ensure Steam client files are present (download + extract if needed) for Steam games
         boolean isSteamGame = shortcut != null && "STEAM".equals(shortcut.getExtra("game_source"));
         if (container.isLaunchRealSteam() || isSteamGame) {
@@ -1689,10 +1755,13 @@ public class XServerDisplayActivity extends AppCompatActivity {
 
         boolean enableWineDebug = preferences.getBoolean("enable_wine_debug", false);
         String wineDebugChannels = preferences.getString("wine_debug_channels", SettingsConfig.DEFAULT_WINE_DEBUG_CHANNELS);
-        envVars.put("WINEDEBUG", enableWineDebug && !wineDebugChannels.isEmpty()
-                ? "+" + wineDebugChannels.replace(",", ",+")
-                : "-all"
-        );
+        String wineDebugValue;
+        if (enableWineDebug && !wineDebugChannels.isEmpty()) {
+            wineDebugValue = "+" + wineDebugChannels.replace(",", ",+");
+        } else {
+            wineDebugValue = "-all";
+        }
+        envVars.put("WINEDEBUG", wineDebugValue);
 
         // Clear any temporary directory
         String rootPath = imageFs.getRootDir().getPath();
@@ -2270,6 +2339,22 @@ public class XServerDisplayActivity extends AppCompatActivity {
         }
 
         Log.d("XServerDisplayActivity", "Input controls simulated confirmation executed. startupProfile=" + (startupProfile != null ? startupProfile.getName() : "none"));
+
+        // After container opens, wait 3 seconds then auto-switch profile based on controller state
+        controllerAutoSwitchRunnable = () -> {
+            boolean hasPhysicalController = !ExternalController.getControllers().isEmpty();
+            if (hasPhysicalController) {
+                Log.d("XServerDisplayActivity", "Auto-switch: physical controller detected after launch, disabling virtual controls");
+                hideInputControls();
+            } else {
+                Log.d("XServerDisplayActivity", "Auto-switch: no physical controller after launch, enabling Virtual Gamepad");
+                ControlsProfile virtualProfile = findFirstVirtualProfile();
+                if (virtualProfile != null) {
+                    showInputControls(virtualProfile);
+                }
+            }
+        };
+        handler.postDelayed(controllerAutoSwitchRunnable, 3000);
     }
 
     private void startTouchscreenTimeout() {
@@ -2501,7 +2586,7 @@ public class XServerDisplayActivity extends AppCompatActivity {
         // Handle the PlayStation or Xbox Home button to open the drawer
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             if (event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_MODE || event.getKeyCode() == KeyEvent.KEYCODE_HOME || event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_SELECT) {
-                boolean handled = inputControlsView.onKeyEvent(event) || (winHandler != null && winHandler.onKeyEvent(event)) && (xServer != null && xServer.keyboard.onKeyEvent(event));
+                onBackPressed();
                 return true;
             }
         }

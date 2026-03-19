@@ -172,13 +172,21 @@ public abstract class WineUtils {
         }
 
         final String[] direct3dLibs = {"d3d8", "d3d9", "d3d10", "d3d10_1", "d3d10core", "d3d11", "d3d12", "d3d12core", "ddraw", "dxgi", "wined3d"};
-        final String[] xinputLibs = {"dinput", "dinput8", "xinput1_1", "xinput1_2", "xinput1_3", "xinput1_4", "xinput9_1_0", "xinputuap"};
+        // DirectInput: always use Wine builtin — evshim creates SDL virtual joysticks that
+        // winebus picks up, so Wine's builtin dinput/dinput8 works on both architectures.
+        final String[] dinputLibs = {"dinput", "dinput8"};
+        // XInput: ARM64EC needs our custom xinput_virtual DLLs (native,builtin) because
+        // Proton's winebus doesn't pass SDL virtual joystick axes to builtin xinput.
+        // x86-64 uses Wine builtins (builtin,native) which work fine via evshim→SDL→winebus.
+        final String[] xinputLibs = {"xinput1_1", "xinput1_2", "xinput1_3", "xinput1_4", "xinput9_1_0", "xinputuap"};
 
         final String dllOverridesKey = "Software\\Wine\\DllOverrides";
 
         try (WineRegistryEditor registryEditor = new WineRegistryEditor(userRegFile)) {
             for (String name : direct3dLibs) registryEditor.setStringValue(dllOverridesKey, name, "native,builtin");
-            for (String name : xinputLibs) registryEditor.setStringValue(dllOverridesKey, name, "builtin,native");
+            for (String name : dinputLibs) registryEditor.setStringValue(dllOverridesKey, name, "builtin,native");
+            String xinputOverride = (wineInfo != null && wineInfo.isArm64EC()) ? "native,builtin" : "builtin,native";
+            for (String name : xinputLibs) registryEditor.setStringValue(dllOverridesKey, name, xinputOverride);
             // Conditional OpenGL override for ARM64EC
             if (wineInfo != null && wineInfo.isArm64EC()) {
                 registryEditor.setStringValue(dllOverridesKey, "opengl32", "native,builtin");

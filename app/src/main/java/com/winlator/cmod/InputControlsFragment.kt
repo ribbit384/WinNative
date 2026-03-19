@@ -59,6 +59,7 @@ import android.widget.ArrayAdapter
 import android.widget.Spinner
 import com.winlator.cmod.inputcontrols.PreferenceKeys
 import com.winlator.cmod.math.Mathf
+import com.winlator.cmod.utils.ControllerHelper
 import com.winlator.cmod.widget.InputControlsView
 import org.json.JSONException
 import org.json.JSONObject
@@ -1387,7 +1388,9 @@ class InputControlsFragment(private val selectedProfileId: Int) : Fragment() {
                 val spinnerBinding = rowView.findViewById<Spinner>(R.id.SBinding)
                 val btnRemove = rowView.findViewById<View>(R.id.BTRemoveBinding)
 
-                tvName.text = binding.toString()
+                val rawLabel = binding.toString()
+                val isPS = controller.deviceId >= 0 && ControllerHelper.isPlayStationControllerById(controller.deviceId)
+                tvName.text = if (isPS) ExternalControllerBinding.getPlayStationLabel(rawLabel) else rawLabel
 
                 // Setup binding spinners
                 setupBindingSpinners(ctx, spinnerType, spinnerBinding, binding, controller, profile)

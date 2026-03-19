@@ -298,7 +298,8 @@ static DWORD fill_state(DWORD user_index, XINPUT_STATE *state) {
     gamepad_io fresh;
     const gamepad_io *raw;
     DWORD bytes_read = 0;
-    LARGE_INTEGER zero_offset;
+    HANDLE temp_file;
+    char path[MAX_PATH];
 
     if (!state || user_index >= XUSER_MAX_COUNT) {
         return ERROR_BAD_ARGUMENTS;
@@ -309,23 +310,14 @@ static DWORD fill_state(DWORD user_index, XINPUT_STATE *state) {
 
     slot = &g_slots[user_index];
 
-    /* ReadFile to get fresh data on every poll.
-     * Wine's MapViewOfFile on ARM (Box64/FEXCore) has stale page cache issues
-     * where changes written by Android's MappedByteBuffer may not be visible
-     * for seconds. ReadFile forces a fresh read through Wine's I/O path.
-     * The overhead (~36 bytes per read) is negligible. */
-    zero_offset.QuadPart = 0;
-    SetFilePointerEx(slot->file, zero_offset, NULL, FILE_BEGIN);
-    if (!ReadFile(slot->file, &fresh, sizeof(gamepad_io), &bytes_read, NULL) ||
-        bytes_read < sizeof(gamepad_io)) {
-        /* Fallback to memory-mapped view if ReadFile fails */
-        if (slot->view) {
-            memcpy(&fresh, (const void *)slot->view, sizeof(gamepad_io));
-        } else {
-            ZeroMemory(state, sizeof(*state));
-            return ERROR_SUCCESS;
-        }
+    if (!slot->view) {
+        ZeroMemory(state, sizeof(*state));
+        return ERROR_SUCCESS;
     }
+
+    /* MemoryBarrier to ensure we read fresh data from the shared mapping */
+    MemoryBarrier();
+    memcpy(&fresh, (const void *)slot->view, sizeof(gamepad_io));
     raw = &fresh;
 
     if (memcmp(&fresh, slot->last_packet, sizeof(slot->last_packet)) != 0) {
@@ -338,7 +330,6 @@ static DWORD fill_state(DWORD user_index, XINPUT_STATE *state) {
             (unsigned long)slot->packet_number);
     }
 
-    /* Periodic log every 500 calls to show we're being polled */
     if (++g_fill_dbg_count % 500 == 1) {
         DBG("P%lu POLL #%d: lx=%d ly=%d rx=%d ry=%d\n",
             (unsigned long)user_index, g_fill_dbg_count,
@@ -351,9 +342,9 @@ static DWORD fill_state(DWORD user_index, XINPUT_STATE *state) {
     state->Gamepad.bLeftTrigger = normalize_trigger(raw->lt);
     state->Gamepad.bRightTrigger = normalize_trigger(raw->rt);
     state->Gamepad.sThumbLX = raw->lx;
-    state->Gamepad.sThumbLY = (raw->ly <= -32767) ? 32767 : -raw->ly;  /* shared mem uses SDL convention (positive=down); XInput expects positive=up */
+    state->Gamepad.sThumbLY = raw->ly;   /* passthrough — no negation */
     state->Gamepad.sThumbRX = raw->rx;
-    state->Gamepad.sThumbRY = (raw->ry <= -32767) ? 32767 : -raw->ry;
+    state->Gamepad.sThumbRY = raw->ry;   /* passthrough — no negation */
     return ERROR_SUCCESS;
 }
 
