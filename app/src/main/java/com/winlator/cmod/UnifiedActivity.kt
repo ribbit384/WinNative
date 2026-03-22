@@ -436,6 +436,14 @@ class UnifiedActivity : ComponentActivity() {
         window.decorView.rootView.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, keyCode))
     }
 
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == com.winlator.cmod.google.CloudSyncManager.REQUEST_CODE_SAVED_GAMES_PERMISSIONS) {
+            com.winlator.cmod.google.CloudSyncManager.onSavedGamesPermissionResult(this)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         db = PluviaDatabase.getInstance(this)
@@ -6195,8 +6203,28 @@ class UnifiedActivity : ComponentActivity() {
         ) { uri ->
             if (uri != null) {
                 // Resolve to a real file path
-                val path = getPathFromContentUri(context, uri)
-                if (path != null && path.lowercase().endsWith(".exe")) {
+                var path = getPathFromContentUri(context, uri)
+                // If path resolution didn't yield an .exe, check the URI display name
+                val isExe = path != null && path.lowercase().endsWith(".exe")
+                if (!isExe && path != null) {
+                    // Try getting the display name from ContentResolver as fallback
+                    val displayName = try {
+                        context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) cursor.getString(0) else null
+                        }
+                    } catch (_: Exception) { null }
+                    if (displayName != null && displayName.lowercase().endsWith(".exe")) {
+                        // Path is valid but extension was lost in resolution; append or recombine
+                        if (!path.lowercase().endsWith(".exe")) {
+                            val parent = java.io.File(path).let { if (it.isDirectory) it else it.parentFile }
+                            if (parent != null) {
+                                val reconstructed = java.io.File(parent, displayName)
+                                if (reconstructed.exists()) path = reconstructed.absolutePath
+                            }
+                        }
+                    }
+                }
+                if (path != null && (path.lowercase().endsWith(".exe") || java.io.File(path).exists())) {
                     selectedExePath = path
                     gameFolder = detectGameFolder(path)
                     // Auto-generate a game name from the folder name
@@ -6359,16 +6387,64 @@ class UnifiedActivity : ComponentActivity() {
         try {
             if (DocumentsContract.isDocumentUri(context, uri)) {
                 val docId = DocumentsContract.getDocumentId(uri)
+                // raw: prefix contains the actual filesystem path directly
+                if (docId.startsWith("raw:")) {
+                    return docId.substringAfter("raw:")
+                }
                 if (docId.startsWith("primary:")) {
                     return "${android.os.Environment.getExternalStorageDirectory().path}/${docId.substringAfter(":")}"
-                } else if (docId.contains(":")) {
+                }
+                // Downloads provider on some Android versions uses "msf:NNN"
+                if (docId.startsWith("msf:") || docId.all { it.isDigit() }) {
+                    val resolved = queryContentResolverForPath(context, uri)
+                    if (resolved != null) return resolved
+                }
+                if (docId.contains(":")) {
                     val parts = docId.split(":", limit = 2)
-                    return if (parts.size == 2) "/storage/${parts[0]}/${parts[1]}" else null
+                    if (parts.size == 2 && parts[1].isNotEmpty()) {
+                        return "/storage/${parts[0]}/${parts[1]}"
+                    }
                 }
             }
         } catch (_: Exception) {}
-        // Fallback: uri.path
-        return uri.path
+
+        // Try querying ContentResolver for _data column (works for many providers)
+        try {
+            val resolved = queryContentResolverForPath(context, uri)
+            if (resolved != null) return resolved
+        } catch (_: Exception) {}
+
+        // Fallback: uri.path — strip common prefixes
+        val rawPath = uri.path
+        if (rawPath != null) {
+            // Handle /document/raw:/actual/path format
+            val rawPrefix = "/document/raw:"
+            if (rawPath.startsWith(rawPrefix)) {
+                return rawPath.substringAfter(rawPrefix)
+            }
+            // Handle /document/primary:path format
+            val primaryPrefix = "/document/primary:"
+            if (rawPath.startsWith(primaryPrefix)) {
+                return "${android.os.Environment.getExternalStorageDirectory().path}/${rawPath.substringAfter(primaryPrefix)}"
+            }
+            // If the path looks like a real file path, return it
+            if (rawPath.startsWith("/storage/") || rawPath.startsWith("/data/")) {
+                return rawPath
+            }
+        }
+        return rawPath
+    }
+
+    // Query ContentResolver for the actual file path via _data column
+    private fun queryContentResolverForPath(context: android.content.Context, uri: Uri): String? {
+        return try {
+            context.contentResolver.query(uri, arrayOf(android.provider.MediaStore.MediaColumns.DATA), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.DATA)
+                    if (idx >= 0) cursor.getString(idx) else null
+                } else null
+            }
+        } catch (_: Exception) { null }
     }
 
     // Create custom game shortcut + container

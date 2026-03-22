@@ -122,6 +122,16 @@ fun GoogleScreen() {
                     AppUtils.showToast(context, message)
                     refreshState()
                 }
+            },
+            onSignOut = {
+                val currentActivity = activity ?: return@GoogleAccountCard
+                busy = true
+                CloudSyncManager.signOut(currentActivity) { success, message ->
+                    busy = false
+                    googleSignedIn = !success
+                    AppUtils.showToast(context, message)
+                    refreshState()
+                }
             }
         )
 
@@ -178,7 +188,8 @@ private fun SectionLabel(text: String, modifier: Modifier = Modifier) {
 private fun GoogleAccountCard(
     isLoggedIn: Boolean,
     busy: Boolean,
-    onSignIn: () -> Unit
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit
 ) {
     val pulse = rememberInfiniteTransition(label = "pulse_google")
     val pulseScale by pulse.animateFloat(
@@ -264,16 +275,11 @@ private fun GoogleAccountCard(
                     onClick = onSignIn
                 )
             } else {
-                Text(
-                    "READY",
-                    color = StatusGreen,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.8.sp,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(StatusGreen.copy(alpha = 0.1f))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ActionButton(
+                    label = if (busy) "Working..." else "Sign Out",
+                    textColor = DangerRed,
+                    enabled = !busy,
+                    onClick = onSignOut
                 )
             }
         }

@@ -841,8 +841,8 @@ public class ShortcutSettingsDialog extends ContentDialog {
         WineInfo wineInfo = WineInfo.fromIdentifier(context, contentsManager, wineVersionStr);
         if (wineInfo.isArm64EC()) {
             fexcoreFL.setVisibility(View.VISIBLE);
-            sEmulator.setSelection(0);
-            sEmulator64.setSelection(0);
+            sEmulator.setSelection(2); // Wowbox64 for 32-bit
+            sEmulator64.setSelection(0); // FEXCore for 64-bit
             sEmulator.setEnabled(false);
             sEmulator64.setEnabled(false);
         } else {

@@ -2,7 +2,11 @@ package com.winlator.cmod.google
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.util.Log
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.Scope
 import com.google.android.gms.games.GamesSignInClient
 import com.google.android.gms.games.PlayGames
 import com.google.android.gms.games.SnapshotsClient
@@ -150,9 +154,20 @@ object CloudSyncManager {
         Timber.tag(TAG).i("Starting Google Play Games sign-in for store login sync")
         gamesSignInClient.signIn().addOnCompleteListener { task ->
             if (task.isSuccessful && task.result?.isAuthenticated == true) {
-                Log.d(TAG, "Sign in successful to Play Games Services; requesting Saved Games consent")
-                Timber.tag(TAG).i("Google Play Games sign-in succeeded; requesting Saved Games access")
-                requestSavedGamesAccess(activity, gamesSignInClient, callback)
+                Log.d(TAG, "Sign in successful to Play Games Services; checking Saved Games scope")
+                Timber.tag(TAG).i("Google Play Games sign-in succeeded; checking Saved Games scope")
+                
+                scope.launch {
+                    val state = ensureSavedGamesPermission(activity, PendingSavedGamesAction.RESTORE)
+                    if (state == SavedGamesPermissionState.REQUESTED) {
+                        Timber.tag(TAG).i("Drive scope missing; requesting permission from user")
+                        callback(true, "Sign-in partially successful; please allow Saved Games access.")
+                    } else if (state == SavedGamesPermissionState.GRANTED) {
+                        requestSavedGamesAccess(activity, gamesSignInClient, callback)
+                    } else {
+                        callback(false, "Google Saved Games is unavailable on this device.")
+                    }
+                }
             } else {
                 Log.e(TAG, "Sign in failed: ${task.exception?.message}")
                 Timber.tag(TAG).e(task.exception, "Google Play Games sign-in failed")
@@ -188,12 +203,22 @@ object CloudSyncManager {
 
     fun signOut(activity: Activity, callback: (Boolean, String) -> Unit) {
         Log.i(TAG, "Signing out of Google Play Games store login sync")
+        Timber.tag(TAG).i("Signing out of Google Play Games and clearing scopes")
+        
         prefs(activity).edit()
             .putBoolean(KEY_GOOGLE_SYNC_ENABLED, false)
             .putBoolean(KEY_PENDING_BACKUP, false)
             .apply()
         clearSyncError(activity)
-        callback(true, "Signed out of Google Play Games for this app.")
+
+        // For PGS v2, there is no direct signOut() on GamesSignInClient.
+        // We sign out from the legacy GoogleSignInClient which should also clear the session.
+        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN).build()
+        val signInClient = GoogleSignIn.getClient(activity, gso)
+        signInClient.signOut().addOnCompleteListener { task ->
+            Timber.tag(TAG).i("Google legacy sign-out complete (success: %s)", task.isSuccessful)
+            callback(true, "Signed out of Google Play Games.")
+        }
     }
 
     fun isAuthenticated(activity: Activity, callback: (Boolean) -> Unit) {
@@ -572,19 +597,71 @@ object CloudSyncManager {
         activity: Activity,
         pendingAction: PendingSavedGamesAction
     ): SavedGamesPermissionState {
-        return SavedGamesPermissionState.GRANTED
+        val driveScope = Scope("https://www.googleapis.com/auth/drive.appdata")
+        val account = GoogleSignIn.getLastSignedInAccount(activity)
+        
+        if (account != null && GoogleSignIn.hasPermissions(account, driveScope)) {
+            Timber.tag(TAG).d("Drive scope already granted for account: %s", account.email)
+            return SavedGamesPermissionState.GRANTED
+        }
+
+        Timber.tag(TAG).i("Requesting DRIVE_APPFOLDER scope via GoogleSignIn UI")
+        pendingSavedGamesAction = pendingAction
+
+        withContext(Dispatchers.Main) {
+            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                .requestScopes(driveScope)
+                .requestEmail()
+                .build()
+            val signInClient = GoogleSignIn.getClient(activity, gso)
+            
+            // This MUST be called on main thread and correctly handled in onActivityResult
+            activity.startActivityForResult(signInClient.signInIntent, REQUEST_CODE_SAVED_GAMES_PERMISSIONS)
+        }
+
+        return SavedGamesPermissionState.REQUESTED
     }
 
     private fun hasSavedGamesPermissionCached(activity: Activity): Boolean {
-        return true
+        val account = GoogleSignIn.getLastSignedInAccount(activity)
+        return account != null && GoogleSignIn.hasPermissions(account, Scope("https://www.googleapis.com/auth/drive.appdata"))
     }
 
     private suspend fun hasSavedGamesPermission(activity: Activity): Boolean {
-        return true
+        return withContext(Dispatchers.IO) {
+            val account = GoogleSignIn.getLastSignedInAccount(activity)
+            account != null && GoogleSignIn.hasPermissions(account, Scope("https://www.googleapis.com/auth/drive.appdata"))
+        }
     }
 
     fun onSavedGamesPermissionResult(activity: Activity) {
-        // No-op for Play Games Services v2 since permissions are handled internally during sign-in
+        val hasPermission = hasSavedGamesPermissionCached(activity)
+        Timber.tag(TAG).i("Google Saved Games permission result: granted=%s", hasPermission)
+        
+        val action = pendingSavedGamesAction
+        pendingSavedGamesAction = null
+
+        if (hasPermission) {
+            // Give Play Games Services a moment to recognize the new permission
+            scope.launch {
+                Timber.tag(TAG).d("Waiting 2s for PGS session to refresh with new Drive permission...")
+                kotlinx.coroutines.delay(2000)
+                
+                if (action != null) {
+                    runCatching {
+                        performSmartSync(activity, preferRestoreForMissingStores = (action == PendingSavedGamesAction.RESTORE))
+                    }.onSuccess { summary ->
+                        permissionEvents.emit(PermissionResumeEvent(true, summary.message()))
+                    }.onFailure { error ->
+                        permissionEvents.emit(PermissionResumeEvent(false, rememberSyncError(activity, error)))
+                    }
+                } else {
+                    permissionEvents.tryEmit(PermissionResumeEvent(true, "Google Saved Games permission granted."))
+                }
+            }
+        } else {
+            permissionEvents.tryEmit(PermissionResumeEvent(false, "Google Saved Games access was denied. Sync will not work."))
+        }
     }
 
     // Removed buildSavedGamesSignInOptions
@@ -971,7 +1048,15 @@ object CloudSyncManager {
 
     private suspend fun isAuthenticatedBlocking(activity: Activity): Boolean {
         return try {
-            val result = Tasks.await(PlayGames.getGamesSignInClient(activity).isAuthenticated)
+            val task = PlayGames.getGamesSignInClient(activity).isAuthenticated
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    com.google.android.gms.tasks.Tasks.await(task, 10, java.util.concurrent.TimeUnit.SECONDS)
+                } catch (e: java.util.concurrent.TimeoutException) {
+                    Timber.tag(TAG).e("Timeout waiting for Google authentication state")
+                    null
+                }
+            }
             val authenticated = result?.isAuthenticated == true
             Timber.tag(TAG).i("Blocking Google auth check result=%s", authenticated)
             authenticated

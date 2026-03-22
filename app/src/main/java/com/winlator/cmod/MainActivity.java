@@ -408,6 +408,8 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
             if (bitmap == null) return;
             File userWallpaperFile = WineThemeManager.getUserWallpaperFile(this);
             ImageUtils.save(bitmap, userWallpaperFile, Bitmap.CompressFormat.PNG, 100);
+        } else if (requestCode == 4101) {
+            com.winlator.cmod.google.CloudSyncManager.INSTANCE.onSavedGamesPermissionResult(this);
         }
     }
 

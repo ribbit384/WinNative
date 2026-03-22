@@ -316,6 +316,7 @@
     <string-array name="emulator_entries">
         <item>FEXCore</item>
         <item>Box64</item>
+        <item>Wowbox64</item>
     </string-array>
     <string-array name="wine_entries">
     </string-array>

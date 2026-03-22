@@ -1876,10 +1876,10 @@ public class ContainerDetailFragment extends Fragment {
                 
                 if (wineInfo.isArm64EC()) {
                     fexcoreFL.setVisibility(View.VISIBLE);
-                    // Arm64EC containers MUST use FEXCore
-                    sEmulator.setSelection(0); // FEXCore
-                    sEmulator64.setSelection(0); // FEXCore
-                    Log.d(TAG, "Arm64EC wine selected: forcing FEXCore for both emulators");
+                    // Arm64EC: 64-bit uses FEXCore, 32-bit uses Wowbox64
+                    sEmulator.setSelection(2); // Wowbox64 for 32-bit
+                    sEmulator64.setSelection(0); // FEXCore for 64-bit
+                    Log.d(TAG, "Arm64EC wine selected: FEXCore for 64-bit, Wowbox64 for 32-bit");
                 }
                 else {
                     fexcoreFL.setVisibility(View.GONE);
@@ -2157,7 +2157,8 @@ public class ContainerDetailFragment extends Fragment {
         String emulator32 = sEmulator.getSelectedItem() != null ? StringUtils.parseIdentifier(sEmulator.getSelectedItem()) : "";
         String emulator64 = sEmulator64.getSelectedItem() != null ? StringUtils.parseIdentifier(sEmulator64.getSelectedItem()) : "";
 
-        boolean useBox64 = emulator32.equalsIgnoreCase("box64") || emulator64.equalsIgnoreCase("box64");
+        boolean useBox64 = emulator32.equalsIgnoreCase("box64") || emulator64.equalsIgnoreCase("box64")
+                || emulator32.equalsIgnoreCase("wowbox64") || emulator64.equalsIgnoreCase("wowbox64");
         boolean useFexcore = emulator32.equalsIgnoreCase("fexcore") || emulator64.equalsIgnoreCase("fexcore");
 
         box64Frame.setVisibility(useBox64 ? View.VISIBLE : View.GONE);
