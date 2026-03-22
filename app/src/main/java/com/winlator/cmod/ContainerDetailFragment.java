@@ -672,6 +672,9 @@ public class ContainerDetailFragment extends Fragment {
 
         final View vDXWrapperConfig = view.findViewById(R.id.BTDXWrapperConfig);
         vDXWrapperConfig.setTag(isShortcutMode() ? shortcut.getExtra("dxwrapperConfig", container != null ? container.getDXWrapperConfig() : Container.DEFAULT_DXWRAPPERCONFIG) : (isEditMode() && container != null ? container.getDXWrapperConfig() : Container.DEFAULT_DXWRAPPERCONFIG));
+        Log.d(TAG, "Initial DXVK config mode=" +
+                (isShortcutMode() ? "shortcut" : (isEditMode() ? "container-edit" : "create-shortcut")) +
+                " value='" + vDXWrapperConfig.getTag() + "'");
 
         final View vGraphicsDriverConfig = view.findViewById(R.id.BTGraphicsDriverConfig);
         vGraphicsDriverConfig.setTag(isShortcutMode() ? shortcut.getExtra("graphicsDriverConfig", container != null ? container.getGraphicsDriverConfig() : Container.DEFAULT_GRAPHICSDRIVERCONFIG) : (isEditMode() && container != null ? container.getGraphicsDriverConfig() : Container.DEFAULT_GRAPHICSDRIVERCONFIG));
@@ -942,6 +945,9 @@ public class ContainerDetailFragment extends Fragment {
                 }
                 String dxwrapper = sDXWrapper.getSelectedItem() != null ? StringUtils.parseIdentifier(sDXWrapper.getSelectedItem()) : Container.DEFAULT_DXWRAPPER;
                 String dxwrapperConfig = vDXWrapperConfig.getTag() != null ? vDXWrapperConfig.getTag().toString() : "";
+                Log.d(TAG, "Confirm clicked mode=" +
+                        (isShortcutMode() ? "shortcut" : (isEditMode() ? "container-edit" : "create-shortcut")) +
+                        " dxwrapper='" + dxwrapper + "' dxwrapperConfig='" + dxwrapperConfig + "'");
                 String audioDriver = sAudioDriver.getSelectedItem() != null ? StringUtils.parseIdentifier(sAudioDriver.getSelectedItem()) : Container.DEFAULT_AUDIO_DRIVER;
                 String emulator = sEmulator.getSelectedItem() != null ? StringUtils.parseIdentifier(sEmulator.getSelectedItem()) : Container.DEFAULT_EMULATOR;
                 String emulator64 = sEmulator64.getSelectedItem() != null ? StringUtils.parseIdentifier(sEmulator64.getSelectedItem()) : Container.DEFAULT_EMULATOR64;
@@ -1059,6 +1065,8 @@ public class ContainerDetailFragment extends Fragment {
                         shortcut.putExtra("graphicsDriverConfig", graphicsDriverConfig);
                         shortcut.putExtra("dxwrapper", dxwrapper);
                         shortcut.putExtra("dxwrapperConfig", dxwrapperConfig);
+                        Log.d(TAG, "Saving shortcut dxwrapperConfig shortcut='" + shortcut.name +
+                                "' containerId=" + shortcut.container.id + " value='" + dxwrapperConfig + "'");
                         shortcut.putExtra("audioDriver", audioDriver);
                         shortcut.putExtra("emulator", emulator);
                         shortcut.putExtra("emulator64", emulator64);
@@ -1119,6 +1127,9 @@ public class ContainerDetailFragment extends Fragment {
                         }
                     }
                     if (!saved) {
+                        Log.d(TAG, "Persist shortcut.saveData shortcut='" + shortcut.name +
+                                "' containerId=" + shortcut.container.id +
+                                "' finalDxwrapperConfig='" + shortcut.getExtra("dxwrapperConfig") + "'");
                         shortcut.saveData();
                     }
 
@@ -1133,6 +1144,8 @@ public class ContainerDetailFragment extends Fragment {
                     container.setGraphicsDriverConfig(graphicsDriverConfig);
                     container.setDXWrapper(dxwrapper);
                     container.setDXWrapperConfig(dxwrapperConfig);
+                    Log.d(TAG, "Saving container dxwrapperConfig containerId=" + container.id +
+                            " value='" + dxwrapperConfig + "'");
                     container.setAudioDriver(audioDriver);
                     container.setEmulator(emulator);
                     container.setEmulator64(emulator64);
@@ -1155,6 +1168,8 @@ public class ContainerDetailFragment extends Fragment {
                     container.setForceDlc(forceDlc);
                     container.setSteamOfflineMode(steamOfflineMode);
                     container.setUnpackFiles(unpackFiles);
+                    Log.d(TAG, "Persist container.saveData containerId=" + container.id +
+                            " finalDxwrapperConfig='" + container.getDXWrapperConfig() + "'");
                     container.saveData();
                     if (cbExclusiveInput != null) {
                         preferences.edit().putBoolean("xinput_toggle", cbExclusiveInput.isChecked()).apply();
