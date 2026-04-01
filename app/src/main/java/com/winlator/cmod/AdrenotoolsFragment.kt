@@ -55,6 +55,11 @@ class AdrenotoolsFragment : Fragment() {
             name = GITHUB_REPO_NAME,
             repoUrl = GITHUB_REPO_URL,
             apiUrl = GITHUB_API_URL
+        ),
+        GithubSourceDefinition(
+            name = XNICK_REPO_NAME,
+            repoUrl = XNICK_REPO_URL,
+            apiUrl = XNICK_API_URL
         )
     )
     private var installedDrivers: List<InstalledDriver> = emptyList()
@@ -782,6 +787,11 @@ class AdrenotoolsFragment : Fragment() {
                 repoUrl = GITHUB_REPO_URL,
                 apiUrl = GITHUB_API_URL
             ))
+            newSources.add(GithubSourceDefinition(
+                name = XNICK_REPO_NAME,
+                repoUrl = XNICK_REPO_URL,
+                apiUrl = XNICK_API_URL
+            ))
         } else {
             try {
                 val array = JSONArray(jsonStr)
@@ -820,37 +830,28 @@ class AdrenotoolsFragment : Fragment() {
     }
 
     private fun showAddRepoDialog(repoToEdit: GithubSourceDefinition?, position: Int) {
-        val context = requireContext()
-        val builder = androidx.appcompat.app.AlertDialog.Builder(context)
-        builder.setTitle(if (repoToEdit == null) "Add Repository" else "Edit Repository")
-        
-        val inputName = android.widget.EditText(context).apply {
-            hint = "Name (e.g. Kimchi Turnip)"
-            if (repoToEdit != null) setText(repoToEdit.name)
+        val dialog = ContentDialog(requireContext(), R.layout.add_driver_repo_dialog)
+        dialog.setTitle(if (repoToEdit == null) "Add Repository" else "Edit Repository")
+
+        val etName = dialog.findViewById<android.widget.EditText>(R.id.ETName)
+        val etUrl = dialog.findViewById<android.widget.EditText>(R.id.ETUrl)
+
+        if (repoToEdit != null) {
+            etName.setText(repoToEdit.name)
+            etUrl.setText(repoToEdit.apiUrl)
         }
-        val inputUrl = android.widget.EditText(context).apply {
-            hint = "GitHub API URL"
-            if (repoToEdit != null) setText(repoToEdit.apiUrl)
-        }
-        val layout = android.widget.LinearLayout(context).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(50, 30, 50, 30)
-            addView(inputName)
-            addView(inputUrl)
-        }
-        
-        builder.setView(layout)
-        builder.setPositiveButton(android.R.string.ok) { _, _ ->
-            val name = inputName.text.toString().trim()
-            var url = inputUrl.text.toString().trim()
-            
+
+        dialog.setOnConfirmCallback {
+            val name = etName.text.toString().trim()
+            var url = etUrl.text.toString().trim()
+
             if (url.startsWith("https://github.com/") && !url.contains("api.github.com")) {
                 url = url.replace("https://github.com/", "https://api.github.com/repos/")
                 if (!url.endsWith("/releases")) {
                     url = "$url/releases"
                 }
             }
-            
+
             if (name.isNotEmpty() && url.isNotEmpty()) {
                 val repoUrl = url.replace("api.github.com/repos", "github.com")
                 val newSource = GithubSourceDefinition(name, repoUrl, url)
@@ -863,8 +864,7 @@ class AdrenotoolsFragment : Fragment() {
                 submitRows()
             }
         }
-        builder.setNegativeButton(android.R.string.cancel, null)
-        builder.show()
+        dialog.show()
     }
 
     private fun showRepoMenu(source: GithubSourceDefinition, position: Int, anchor: View) {
@@ -890,16 +890,11 @@ class AdrenotoolsFragment : Fragment() {
                     true
                 }
                 2 -> {
-                    androidx.appcompat.app.AlertDialog.Builder(requireContext())
-                        .setTitle("Remove Repository")
-                        .setMessage("Are you sure you want to remove this repository?")
-                        .setPositiveButton(android.R.string.ok) { _, _ ->
-                            githubSources.removeAt(position)
-                            saveRepos()
-                            submitRows()
-                        }
-                        .setNegativeButton(android.R.string.cancel, null)
-                        .show()
+                    ContentDialog.confirm(requireContext(), "Are you sure you want to remove this repository?") {
+                        githubSources.removeAt(position)
+                        saveRepos()
+                        submitRows()
+                    }
                     true
                 }
                 else -> false
@@ -918,6 +913,10 @@ class AdrenotoolsFragment : Fragment() {
         private const val GITHUB_REPO_NAME = "StevenMXZ/freedreno_turnip-CI"
         private const val GITHUB_REPO_URL = "https://github.com/StevenMXZ/freedreno_turnip-CI/releases"
         private const val GITHUB_API_URL = "https://api.github.com/repos/StevenMXZ/freedreno_turnip-CI/releases"
+
+        private const val XNICK_REPO_NAME = "Xnick417x"
+        private const val XNICK_REPO_URL = "https://github.com/Xnick417x/Winlator-Bionic-Nightly-wcp/releases"
+        private const val XNICK_API_URL = "https://api.github.com/repos/Xnick417x/Winlator-Bionic-Nightly-wcp/releases"
 
         private val DiffCallback = object : DiffUtil.ItemCallback<DriverRow>() {
             override fun areItemsTheSame(oldItem: DriverRow, newItem: DriverRow): Boolean {
