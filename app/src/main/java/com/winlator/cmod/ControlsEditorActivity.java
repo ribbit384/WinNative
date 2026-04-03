@@ -105,7 +105,8 @@ public class ControlsEditorActivity extends AppCompatActivity implements View.On
         final int[] colors = {
             0xFFFFFFFF, 0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFF00,
             0xFF00FFFF, 0xFFFF00FF, 0xFFFFA500, 0xFF800080, 0xFF008000,
-            0xFF008080, 0xFF000080, 0xFF800000, 0xFF808000, 0xFF808080
+            0xFF008080, 0xFF000080, 0xFF800000, 0xFF808000, 0xFF808080,
+            0xFFC4460C, 0xFF2B2928, 0xFF3B0878, 0xFF000000, 0xFF964B00
         };
 
         gvColors.setAdapter(new BaseAdapter() {
@@ -125,6 +126,7 @@ public class ControlsEditorActivity extends AppCompatActivity implements View.On
                     etHexColor.setText(String.format("#%06X", (0xFFFFFF & colors[position])));
                     element.setCustomColor(colors[position]);
                     inputControlsView.invalidate();
+                    profile.save();
                 });
                 return colorView;
             }
