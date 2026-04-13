@@ -33,9 +33,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DeveloperBoard
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -50,7 +53,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -504,7 +506,7 @@ private fun ComponentItemCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    painter = painterResource(id = iconFor(item.type)),
+                    imageVector = iconFor(item.type),
                     contentDescription = null,
                     tint = Accent,
                     modifier = Modifier.size(20.dp),
@@ -843,15 +845,15 @@ private fun formatBytes(bytes: Long): String {
     }
 }
 
-private fun iconFor(type: ContentProfile.ContentType): Int =
+private fun iconFor(type: ContentProfile.ContentType): ImageVector =
     when (type) {
         ContentProfile.ContentType.CONTENT_TYPE_WINE,
-        ContentProfile.ContentType.CONTENT_TYPE_PROTON -> R.drawable.icon_wine
+        ContentProfile.ContentType.CONTENT_TYPE_PROTON -> Icons.Outlined.Science
 
         ContentProfile.ContentType.CONTENT_TYPE_DXVK,
-        ContentProfile.ContentType.CONTENT_TYPE_VKD3D -> R.drawable.ic_drivers
+        ContentProfile.ContentType.CONTENT_TYPE_VKD3D -> Icons.Outlined.DeveloperBoard
 
         ContentProfile.ContentType.CONTENT_TYPE_BOX64,
         ContentProfile.ContentType.CONTENT_TYPE_WOWBOX64,
-        ContentProfile.ContentType.CONTENT_TYPE_FEXCORE -> R.drawable.icon_cpu
+        ContentProfile.ContentType.CONTENT_TYPE_FEXCORE -> Icons.Outlined.Memory
     }

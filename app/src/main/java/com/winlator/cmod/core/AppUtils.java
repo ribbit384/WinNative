@@ -7,6 +7,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.content.res.Resources;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
@@ -25,6 +26,7 @@ import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.ArrayAdapter;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.widget.Spinner;
@@ -182,14 +184,22 @@ public abstract class AppUtils {
         return showToast(context, context.getString(textResId));
     }
 
+    public static Toast showToast(Context context, int textResId, Bitmap iconBitmap) {
+        return showToast(context, context.getString(textResId), iconBitmap);
+    }
+
     public static void showToast(Context context, int textResId, long durationMs) {
         showToast(context, context.getString(textResId), durationMs);
     }
 
     public static Toast showToast(final Context context, final String text) {
+        return showToast(context, text, null);
+    }
+
+    public static Toast showToast(final Context context, final String text, final Bitmap iconBitmap) {
         if (!isUiThread()) {
             if (context instanceof Activity) {
-                ((Activity)context).runOnUiThread(() -> showToast(context, text));
+                ((Activity)context).runOnUiThread(() -> showToast(context, text, iconBitmap));
             }
             return null;
         }
@@ -202,6 +212,9 @@ public abstract class AppUtils {
 
         View view = LayoutInflater.from(context).inflate(R.layout.custom_toast, null);
         ((TextView)view.findViewById(R.id.TextView)).setText(text);
+        if (iconBitmap != null) {
+            ((ImageView)view.findViewById(R.id.IconView)).setImageBitmap(iconBitmap);
+        }
 
         Toast toast = new Toast(context);
         toast.setGravity(Gravity.CENTER | Gravity.BOTTOM, 0, 50);

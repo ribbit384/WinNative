@@ -2,7 +2,6 @@ package com.winlator.cmod
 
 import android.app.Activity
 import android.content.Context
-import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +19,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ExitToApp
+import androidx.compose.material.icons.automirrored.outlined.ViewList
+import androidx.compose.material.icons.outlined.Fullscreen
+import androidx.compose.material.icons.outlined.Keyboard
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Monitor
+import androidx.compose.material.icons.outlined.Mouse
+import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.PictureInPictureAlt
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.SportsEsports
+import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -30,9 +44,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,7 +67,7 @@ data class XServerDrawerItem(
     val itemId: Int,
     val title: String,
     val subtitle: String,
-    @DrawableRes val iconRes: Int,
+    val icon: ImageVector,
     val active: Boolean = false,
 )
 
@@ -94,72 +108,72 @@ fun buildXServerDrawerState(
             itemId = R.id.main_menu_keyboard,
             title = context.getString(R.string.session_drawer_keyboard),
             subtitle = context.getString(R.string.session_drawer_keyboard_subtitle),
-            iconRes = R.drawable.icon_keyboard,
+            icon = Icons.Outlined.Keyboard,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_input_controls,
             title = context.getString(R.string.common_ui_input_controls),
             subtitle = context.getString(R.string.session_drawer_input_controls_subtitle),
-            iconRes = R.drawable.icon_input_controls,
+            icon = Icons.Outlined.SportsEsports,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_fps_monitor,
             title = context.getString(R.string.session_drawer_fps_monitor),
             subtitle = if (fpsMonitorEnabled) context.getString(R.string.common_ui_enabled) else context.getString(R.string.common_ui_disabled),
-            iconRes = R.drawable.icon_monitor,
+            icon = Icons.Outlined.Monitor,
             active = fpsMonitorEnabled,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_relative_mouse_movement,
             title = context.getString(R.string.session_drawer_relative_mouse_movement),
             subtitle = if (relativeMouseEnabled) context.getString(R.string.common_ui_enabled) else context.getString(R.string.common_ui_disabled),
-            iconRes = R.drawable.ic_input_kbd_mouse_move,
+            icon = Icons.Outlined.Mouse,
             active = relativeMouseEnabled,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_disable_mouse,
             title = context.getString(R.string.session_drawer_mouse_input),
             subtitle = if (mouseDisabled) context.getString(R.string.common_ui_disabled) else context.getString(R.string.common_ui_enabled),
-            iconRes = R.drawable.ic_input_kbd_mouse,
+            icon = Icons.Outlined.Mouse,
             active = !mouseDisabled,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_screen_effects,
             title = context.getString(R.string.session_effects_title),
             subtitle = context.getString(R.string.session_drawer_screen_effects_subtitle),
-            iconRes = R.drawable.icon_screen_effect,
+            icon = Icons.Outlined.Tune,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_toggle_fullscreen,
             title = context.getString(R.string.session_drawer_toggle_fullscreen),
             subtitle = context.getString(R.string.session_drawer_fullscreen_subtitle),
-            iconRes = R.drawable.icon_fullscreen,
+            icon = Icons.Outlined.Fullscreen,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_native_rendering,
             title = nativeRenderingTitle,
             subtitle = nativeRenderingSubtitle,
-            iconRes = R.drawable.ic_drivers,
+            icon = Icons.Outlined.Memory,
             active = nativeRenderingEnabled,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_pause,
             title = if (paused) context.getString(R.string.session_drawer_resume) else context.getString(R.string.session_drawer_pause),
             subtitle = if (paused) context.getString(R.string.session_drawer_wine_processes_paused) else context.getString(R.string.session_drawer_pause_all_wine_processes),
-            iconRes = if (paused) R.drawable.icon_play else R.drawable.icon_pause,
+            icon = if (paused) Icons.Outlined.PlayArrow else Icons.Outlined.Pause,
             active = paused,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_pip_mode,
             title = context.getString(R.string.session_drawer_picture_in_picture),
             subtitle = context.getString(R.string.session_drawer_pip_subtitle),
-            iconRes = R.drawable.ic_picture_in_picture_alt,
+            icon = Icons.Outlined.PictureInPictureAlt,
         ),
         XServerDrawerItem(
             itemId = R.id.main_menu_task_manager,
             title = context.getString(R.string.session_task_title),
             subtitle = context.getString(R.string.session_drawer_task_manager_subtitle),
-            iconRes = R.drawable.icon_task_manager,
+            icon = Icons.AutoMirrored.Outlined.ViewList,
         ),
     )
 
@@ -168,7 +182,7 @@ fun buildXServerDrawerState(
             itemId = R.id.main_menu_magnifier,
             title = context.getString(R.string.session_drawer_magnifier),
             subtitle = context.getString(R.string.session_drawer_magnifier_subtitle),
-            iconRes = R.drawable.icon_magnifier,
+            icon = Icons.Outlined.ZoomIn,
         )
     }
 
@@ -177,7 +191,7 @@ fun buildXServerDrawerState(
             itemId = R.id.main_menu_logs,
             title = context.getString(R.string.session_drawer_logs),
             subtitle = context.getString(R.string.session_drawer_logs_subtitle),
-            iconRes = R.drawable.icon_debug,
+            icon = Icons.Outlined.Terminal,
         )
     }
 
@@ -185,7 +199,7 @@ fun buildXServerDrawerState(
         itemId = R.id.main_menu_exit,
         title = context.getString(R.string.common_ui_exit),
         subtitle = context.getString(R.string.session_drawer_exit_subtitle),
-        iconRes = R.drawable.icon_exit,
+        icon = Icons.AutoMirrored.Outlined.ExitToApp,
     )
 
     return XServerDrawerState(items, hudTransparency, hudScale, hudElements, dualSeriesBatteryEnabled)
@@ -418,7 +432,7 @@ private fun XServerDrawerRow(
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                painter = painterResource(item.iconRes),
+                imageVector = item.icon,
                 contentDescription = null,
                 tint = if (item.active) accent else textPrimary,
                 modifier = Modifier.size(22.dp)

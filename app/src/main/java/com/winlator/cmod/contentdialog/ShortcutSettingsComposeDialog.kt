@@ -189,20 +189,21 @@ class ShortcutSettingsComposeDialog private constructor(
             }
 
             override fun onAddToHomeScreen() {
-                val requested = if (fragment != null) {
+                val result = if (fragment != null) {
                     fragment.addShortcutToScreen(shortcut)
                 } else {
                     addShortcutToScreen(shortcut)
                 }
-                if (!requested) {
-                    Toast.makeText(
+                if (result == ShortcutsFragment.PinShortcutResult.REUSED_EXISTING) {
+                    AppUtils.showToast(context, R.string.shortcuts_list_readded_existing, shortcut.icon)
+                } else if (result == ShortcutsFragment.PinShortcutResult.FAILED) {
+                    AppUtils.showToast(
                         context,
                         context.getString(
                             R.string.library_games_failed_to_create_shortcut,
                             shortcut.name
-                        ),
-                        Toast.LENGTH_SHORT
-                    ).show()
+                        )
+                    )
                 }
             }
 
@@ -1191,27 +1192,41 @@ class ShortcutSettingsComposeDialog private constructor(
     // Helper methods
     // ------------------------------------------------------------------
 
-    private fun addShortcutToScreen(shortcut: Shortcut): Boolean {
+    private fun addShortcutToScreen(shortcut: Shortcut): ShortcutsFragment.PinShortcutResult {
         if (shortcut.getExtra("uuid").isEmpty()) shortcut.genUUID()
+        val shortcutUuid = shortcut.getExtra("uuid")
+        val shortcutPath = shortcut.file.absolutePath
+        val shortcutIds = ShortcutsFragment.buildPinnedShortcutIds(shortcut.container.id, shortcutUuid, shortcutPath)
+        if (shortcutIds.isEmpty()) return ShortcutsFragment.PinShortcutResult.FAILED
+
         val shortcutManager = context.getSystemService(ShortcutManager::class.java)
-            ?: return false
-        if (!shortcutManager.isRequestPinShortcutSupported) return false
+            ?: return ShortcutsFragment.PinShortcutResult.FAILED
+        if (!shortcutManager.isRequestPinShortcutSupported) return ShortcutsFragment.PinShortcutResult.FAILED
+
         val shortcutIcon = if (shortcut.icon != null) Icon.createWithBitmap(shortcut.icon)
         else Icon.createWithResource(context, R.drawable.icon_shortcut)
 
-        val intent = Intent(context, XServerDisplayActivity::class.java).apply {
-            action = Intent.ACTION_VIEW
-            putExtra("container_id", shortcut.container.id)
-            putExtra("shortcut_path", shortcut.file.path)
-        }
-        val info = ShortcutInfo.Builder(context, shortcut.getExtra("uuid"))
+        val info = ShortcutInfo.Builder(context, shortcutIds.last())
             .setShortLabel(shortcut.name)
             .setLongLabel(shortcut.name)
             .setIcon(shortcutIcon)
-            .setIntent(intent)
+            .setIntent(
+                ShortcutsFragment.buildShortcutLaunchIntent(
+                    context,
+                    shortcut.container.id,
+                    shortcutPath,
+                    shortcut.name,
+                    shortcutUuid
+                )
+            )
             .build()
 
-        return shortcutManager.requestPinShortcut(info, null)
+        return ShortcutsFragment.pinOrUpdateShortcut(
+            shortcutManager,
+            info,
+            shortcutIds,
+            null
+        )
     }
 
     private fun resolveInitialLaunchExePath(): String {

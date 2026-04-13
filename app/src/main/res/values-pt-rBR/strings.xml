@@ -204,6 +204,7 @@
     <string name="shortcuts_list_error_opening_settings">Erro ao abrir configuracoes do atalho</string>
     <string name="shortcuts_list_removed">Atalho removido com sucesso.</string>
     <string name="shortcuts_list_remove_failed">Falha ao remover o atalho. Por favor, tente novamente.</string>
+    <string name="shortcuts_list_remove_game_shortcut_message">Remover atalho\n%1$s</string>
     <string name="shortcuts_list_cloned">Atalho clonado com sucesso.</string>
     <string name="shortcuts_list_clone_failed">Falha ao clonar atalho.</string>
     <string name="shortcuts_list_exported_to">Atalho exportado para %1$s</string>

@@ -30,11 +30,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CloudSync
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Gamepad
-import androidx.compose.material.icons.filled.Upload
-import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.outlined.CloudSync
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Gamepad
+import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -241,7 +241,7 @@ private fun AutoBackupCard(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Filled.CloudSync,
+                    imageVector = Icons.Outlined.CloudSync,
                     contentDescription = null,
                     tint = if (enabled && googleSignedIn) StatusGreen else TextSecondary,
                     modifier = Modifier.size(17.dp)
@@ -333,7 +333,7 @@ private fun GoogleAccountCard(
                 .padding(horizontal = 14.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconBox(icon = Icons.Filled.Gamepad, tint = Color(0xFF34A853))
+            IconBox(icon = Icons.Outlined.Gamepad, tint = Color(0xFF34A853))
 
             Spacer(Modifier.width(14.dp))
 
@@ -480,14 +480,14 @@ private fun StoreLoginCard(
                     ActionButton(
                         label = if (busy) stringResource(R.string.google_cloud_working) else stringResource(R.string.google_cloud_backup),
                         textColor = WarningAmber,
-                        icon = Icons.Filled.Upload,
+                        icon = Icons.Outlined.Upload,
                         enabled = !busy && state.googleSignedIn && state.localStores.isNotEmpty(),
                         onClick = onBackup
                     )
                     ActionButton(
                         label = if (busy) stringResource(R.string.google_cloud_working) else stringResource(R.string.google_cloud_restore),
                         textColor = Accent,
-                        icon = Icons.Filled.Restore,
+                        icon = Icons.Outlined.Restore,
                         enabled = !busy && state.googleSignedIn && state.cloudStores.isNotEmpty(),
                         onClick = onRestore
                     )
@@ -550,7 +550,7 @@ private fun StatusIconBox(statusColor: Color) {
                 .background(IconBoxBg)
         )
         Icon(
-            imageVector = Icons.Filled.CloudSync,
+            imageVector = Icons.Outlined.CloudSync,
             contentDescription = null,
             tint = statusColor,
             modifier = Modifier.size(21.dp)
@@ -566,7 +566,7 @@ private fun StatusIconBox(statusColor: Color) {
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Filled.Close,
+                    imageVector = Icons.Outlined.Close,
                     contentDescription = null,
                     tint = Color.White,
                     modifier = Modifier.size(10.dp)

@@ -204,6 +204,7 @@
     <string name="shortcuts_list_error_opening_settings">打开快捷方式设置时出错</string>
     <string name="shortcuts_list_removed">快捷方式已成功移除。</string>
     <string name="shortcuts_list_remove_failed">移除快捷方式失败。请重试。</string>
+    <string name="shortcuts_list_remove_game_shortcut_message">移除快捷方式\n%1$s</string>
     <string name="shortcuts_list_cloned">快捷方式已成功克隆。</string>
     <string name="shortcuts_list_clone_failed">克隆快捷方式失败。</string>
     <string name="shortcuts_list_exported_to">快捷方式已导出到 %1$s</string>

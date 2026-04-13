@@ -3,85 +3,39 @@ package com.winlator.cmod;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.ShortcutInfo;
-import android.content.pm.ShortcutManager;
-import android.graphics.Bitmap;
-import android.graphics.drawable.Icon;
-import android.os.Build;
 import android.util.Log;
-import android.widget.Toast;
+
+import com.winlator.cmod.core.AppUtils;
 
 public class ShortcutBroadcastReceiver extends BroadcastReceiver {
 
     private static final String LOG_TAG = "ShortcutBroadcastReceiver";
-    private static final String ACTION_SHORTCUT_ADDED = BuildConfig.APPLICATION_ID + ".SHORTCUT_ADDED";
+    public static final String ACTION_SHORTCUT_ADDED = BuildConfig.APPLICATION_ID + ".SHORTCUT_ADDED";
+    public static final String ACTION_PIN_SHORTCUT_RESULT = BuildConfig.APPLICATION_ID + ".PIN_SHORTCUT_RESULT";
 
     @Override
     public void onReceive(Context context, Intent intent) {
         String action = intent.getAction();
-        if (action != null && action.equals(ACTION_SHORTCUT_ADDED)) {
+        if (ACTION_PIN_SHORTCUT_RESULT.equals(action)) {
+            Log.d(LOG_TAG, "Pinned shortcut confirmed by launcher.");
+            AppUtils.showToast(context, R.string.shortcuts_list_added);
+            UnifiedActivity.Companion.refreshLibrary();
+            return;
+        }
+
+        if (ACTION_SHORTCUT_ADDED.equals(action)) {
             boolean isShortcutAdded = intent.getBooleanExtra("shortcut_added", false);
             if (isShortcutAdded) {
-                Log.d(LOG_TAG, "Shortcut added successfully, refreshing library...");
+                Log.d(LOG_TAG, "Shortcut metadata changed, refreshing library.");
                 UnifiedActivity.Companion.refreshLibrary();
             } else {
                 Log.d(LOG_TAG, "Shortcut addition failed.");
-                Toast.makeText(context, R.string.shortcuts_list_failed_add, Toast.LENGTH_SHORT).show();
-
-                // Attempt to add the shortcut here if it failed
-                addShortcutToHomeScreen(context, intent);
+                AppUtils.showToast(context, R.string.shortcuts_list_failed_add);
             }
-        } else {
-            Log.d(LOG_TAG, "Unexpected broadcast action received.");
+            return;
         }
-    }
 
-    private void addShortcutToHomeScreen(Context context, Intent originalIntent) {
-        String shortcutName = originalIntent.getStringExtra("shortcut_name");
-        Bitmap shortcutIcon = originalIntent.getParcelableExtra("shortcut_icon");
-        Intent shortcutIntent = originalIntent.getParcelableExtra(Intent.EXTRA_SHORTCUT_INTENT);
-
-        if (shortcutName != null && shortcutIcon != null && shortcutIntent != null) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                ShortcutManager shortcutManager = context.getSystemService(ShortcutManager.class);
-
-                if (shortcutManager != null && shortcutManager.isRequestPinShortcutSupported()) {
-                    ShortcutInfo pinShortcutInfo = new ShortcutInfo.Builder(context, shortcutName)
-                            .setShortLabel(shortcutName)
-                            .setIcon(Icon.createWithBitmap(shortcutIcon))
-                            .setIntent(shortcutIntent)
-                            .build();
-
-                    Log.d(LOG_TAG, "Requesting pin shortcut from the BroadcastReceiver...");
-                    boolean result = shortcutManager.requestPinShortcut(pinShortcutInfo, null);
-                    Log.d(LOG_TAG, "Pin shortcut requested with result: " + result);
-
-                    if (result) {
-                        Toast.makeText(context, R.string.shortcuts_list_added, Toast.LENGTH_SHORT).show();
-                    } else {
-                        Log.e(LOG_TAG, "Failed to add shortcut from BroadcastReceiver.");
-                    }
-                }
-            } else {
-                // Fallback for older versions (API < 26)
-                Intent addIntent = new Intent();
-                addIntent.putExtra(Intent.EXTRA_SHORTCUT_INTENT, shortcutIntent);
-                addIntent.putExtra(Intent.EXTRA_SHORTCUT_NAME, shortcutName);
-                addIntent.putExtra(Intent.EXTRA_SHORTCUT_ICON, shortcutIcon);
-                addIntent.setAction("com.android.launcher.action.INSTALL_SHORTCUT");
-
-                try {
-                    context.sendBroadcast(addIntent);
-                    Log.d(LOG_TAG, "Sent broadcast to install shortcut from BroadcastReceiver.");
-                    Toast.makeText(context, R.string.shortcuts_list_added, Toast.LENGTH_SHORT).show();
-                } catch (Exception e) {
-                    Log.e(LOG_TAG, "Error sending broadcast for installing shortcut: " + e.getMessage(), e);
-                    Toast.makeText(context, R.string.shortcuts_list_failed_add, Toast.LENGTH_SHORT).show();
-                }
-            }
-        } else {
-            Log.e(LOG_TAG, "Missing shortcut data, cannot add to home screen.");
-        }
+        Log.d(LOG_TAG, "Unexpected broadcast action received.");
     }
 }
 

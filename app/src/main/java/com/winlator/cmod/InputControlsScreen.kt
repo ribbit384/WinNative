@@ -35,6 +35,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.FileUpload
+import androidx.compose.material.icons.outlined.ScreenRotationAlt
+import androidx.compose.material.icons.outlined.SportsEsports
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -53,9 +66,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -219,21 +232,21 @@ fun InputControlsScreen(
             item("actions-label") { SectionLabel(stringResource(R.string.common_ui_profile)) }
             item("import-card") {
                 ActionCard(
-                    iconRes = R.drawable.ic_controls_import,
+                    icon = Icons.Outlined.FileDownload,
                     title = stringResource(R.string.input_controls_editor_import_profile),
                     onClick = actions.onImportProfile,
                 )
             }
             item("download-card") {
                 ActionCard(
-                    iconRes = R.drawable.ic_content_download,
+                    icon = Icons.Outlined.Download,
                     title = stringResource(R.string.common_ui_download),
                     onClick = actions.onDownloadProfile,
                 )
             }
             item("export-card") {
                 ActionCard(
-                    iconRes = R.drawable.ic_controls_export,
+                    icon = Icons.Outlined.FileUpload,
                     title = stringResource(R.string.input_controls_editor_export_profile),
                     onClick = actions.onExportProfile,
                 )
@@ -336,7 +349,7 @@ private fun CardShell(
 
 @Composable
 private fun IconBox(
-    painterRes: Int,
+    image: ImageVector,
     tint: Color,
 ) {
     Box(
@@ -347,7 +360,7 @@ private fun IconBox(
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            painter = painterResource(painterRes),
+            imageVector = image,
             contentDescription = null,
             tint = tint,
             modifier = Modifier.size(22.dp),
@@ -357,7 +370,7 @@ private fun IconBox(
 
 @Composable
 private fun IconActionButton(
-    painterRes: Int,
+    image: ImageVector,
     contentDescription: String,
     tint: Color = InputTextSecondary,
     onClick: () -> Unit,
@@ -377,7 +390,7 @@ private fun IconActionButton(
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            painter = painterResource(painterRes),
+            imageVector = image,
             contentDescription = contentDescription,
             tint = tint,
             modifier = Modifier.size(if (size <= 28.dp) 14.dp else 18.dp),
@@ -480,7 +493,7 @@ private fun SelectionPill(
         )
         Spacer(Modifier.width(8.dp))
         Icon(
-            painter = painterResource(R.drawable.ic_content_chevron),
+            imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
             contentDescription = null,
             tint = InputTextSecondary,
             modifier = Modifier.size(14.dp),
@@ -1203,31 +1216,31 @@ private fun ProfileCard(
             }
             Spacer(Modifier.width(10.dp))
             IconActionButton(
-                painterRes = R.drawable.ic_input_controls,
+                image = Icons.Outlined.SportsEsports,
                 contentDescription = stringResource(R.string.input_controls_editor_title),
                 onClick = actions.onOpenEditor,
             )
             Spacer(Modifier.width(6.dp))
             IconActionButton(
-                painterRes = R.drawable.ic_content_add,
+                image = Icons.Outlined.Add,
                 contentDescription = stringResource(R.string.common_ui_add),
                 onClick = actions.onAddProfile,
             )
             Spacer(Modifier.width(6.dp))
             IconActionButton(
-                painterRes = R.drawable.ic_controls_edit,
+                image = Icons.Outlined.Edit,
                 contentDescription = stringResource(R.string.common_ui_edit),
                 onClick = actions.onEditProfile,
             )
             Spacer(Modifier.width(6.dp))
             IconActionButton(
-                painterRes = R.drawable.ic_controls_duplicate,
+                image = Icons.Outlined.ContentCopy,
                 contentDescription = stringResource(R.string.common_ui_duplicate),
                 onClick = actions.onDuplicateProfile,
             )
             Spacer(Modifier.width(6.dp))
             IconActionButton(
-                painterRes = R.drawable.ic_content_menu_remove,
+                image = Icons.Outlined.Delete,
                 contentDescription = stringResource(R.string.common_ui_remove),
                 tint = InputDanger,
                 onClick = actions.onRemoveProfile,
@@ -1247,7 +1260,7 @@ private fun OverlayOpacityCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconBox(R.drawable.ic_controls_opacity, InputTextSecondary)
+                IconBox(Icons.Outlined.Visibility, InputTextSecondary)
                 Spacer(Modifier.width(14.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -1280,7 +1293,7 @@ private fun OverlayOpacityCard(
 
 @Composable
 private fun ActionCard(
-    iconRes: Int,
+    icon: ImageVector,
     title: String,
     onClick: () -> Unit,
 ) {
@@ -1297,7 +1310,7 @@ private fun ActionCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    painter = painterResource(iconRes),
+                    imageVector = icon,
                     contentDescription = null,
                     tint = InputTextSecondary,
                     modifier = Modifier.size(18.dp),
@@ -1312,7 +1325,7 @@ private fun ActionCard(
                 modifier = Modifier.weight(1f),
             )
             IconActionButton(
-                painterRes = R.drawable.ic_content_chevron,
+                image = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
                 contentDescription = title,
                 onClick = onClick,
             )
@@ -1359,7 +1372,7 @@ private fun Subcard(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    painter = painterResource(R.drawable.ic_content_chevron),
+                    imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
                     contentDescription = null,
                     tint = InputTextSecondary,
                     modifier = Modifier
@@ -1468,7 +1481,7 @@ private fun GyroscopeCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconBox(R.drawable.icon_motion_controls, InputTextSecondary)
+                IconBox(Icons.Outlined.ScreenRotationAlt, InputTextSecondary)
                 Spacer(Modifier.width(14.dp))
                 Text(
                     text = stringResource(R.string.session_gyroscope_title),
@@ -1641,7 +1654,7 @@ private fun TriggerTypeCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconBox(R.drawable.ic_controls_trigger, InputTextSecondary)
+                IconBox(Icons.Outlined.Tune, InputTextSecondary)
                 Spacer(Modifier.width(14.dp))
                 Text(
                     text = stringResource(R.string.session_gamepad_trigger_type),
@@ -1691,7 +1704,7 @@ private fun ControllerCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconBox(
-                    painterRes = R.drawable.icon_gamepad,
+                    image = Icons.Outlined.SportsEsports,
                     tint = if (state.connected) InputAccent else InputDanger,
                 )
                 Spacer(Modifier.width(14.dp))
@@ -1713,7 +1726,7 @@ private fun ControllerCard(
                 }
                 if (state.showBindings && state.bindingCount > 0) {
                     IconActionButton(
-                        painterRes = R.drawable.ic_content_menu_remove,
+                        image = Icons.Outlined.Delete,
                         contentDescription = stringResource(R.string.common_ui_remove),
                         tint = InputDanger,
                         onClick = { actions.onRemoveController(state.controllerId) },
@@ -1798,7 +1811,7 @@ private fun BindingRow(
         )
         Spacer(Modifier.width(6.dp))
         IconActionButton(
-            painterRes = R.drawable.ic_content_menu_remove,
+            image = Icons.Outlined.Delete,
             contentDescription = stringResource(R.string.common_ui_remove),
             tint = InputDanger,
             onClick = { actions.onRemoveBinding(controllerId, state.keyCode) },
@@ -1837,7 +1850,7 @@ private fun BindingSelectionButton(
         )
         Spacer(Modifier.width(4.dp))
         Icon(
-            painter = painterResource(R.drawable.ic_content_chevron),
+            imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
             contentDescription = null,
             tint = InputTextSecondary,
             modifier = Modifier.size(12.dp),

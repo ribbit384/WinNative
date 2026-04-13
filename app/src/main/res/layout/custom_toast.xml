@@ -9,6 +9,7 @@
     android:background="@drawable/custom_toast_background">
 
     <ImageView
+        android:id="@+id/IconView"
         android:layout_width="28dp"
         android:layout_height="28dp"
         android:layout_marginRight="10dp"

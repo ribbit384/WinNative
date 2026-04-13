@@ -204,6 +204,7 @@
     <string name="shortcuts_list_error_opening_settings">Помилка відкриття налаштувань ярлика</string>
     <string name="shortcuts_list_removed">Ярлик успішно видалено.</string>
     <string name="shortcuts_list_remove_failed">Не вдалося видалити ярлик. Спробуйте ще раз.</string>
+    <string name="shortcuts_list_remove_game_shortcut_message">Видалити ярлик\n%1$s</string>
     <string name="shortcuts_list_cloned">Ярлик успішно клоновано.</string>
     <string name="shortcuts_list_clone_failed">Не вдалося клонувати ярлик.</string>
     <string name="shortcuts_list_exported_to">Ярлик експортовано до %1$s</string>

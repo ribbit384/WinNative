@@ -204,6 +204,7 @@
     <string name="shortcuts_list_error_opening_settings">Errore nell\'apertura delle impostazioni della scorciatoia</string>
     <string name="shortcuts_list_removed">Scorciatoia rimossa con successo.</string>
     <string name="shortcuts_list_remove_failed">Impossibile rimuovere la scorciatoia. Riprova.</string>
+    <string name="shortcuts_list_remove_game_shortcut_message">Rimuovi scorciatoia\n%1$s</string>
     <string name="shortcuts_list_cloned">Scorciatoia clonata con successo.</string>
     <string name="shortcuts_list_clone_failed">Impossibile clonare la scorciatoia.</string>
     <string name="shortcuts_list_exported_to">Scorciatoia esportata in %1$s</string>

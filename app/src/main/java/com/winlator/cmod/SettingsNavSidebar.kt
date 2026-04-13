@@ -23,6 +23,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.ShoppingBag
+import androidx.compose.material.icons.outlined.SportsEsports
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.ViewInAr
+import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,9 +47,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.Stroke
 import com.winlator.cmod.widget.chasingBorder
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -72,19 +83,19 @@ enum class NavSection {
 
 enum class SettingsNavItem(
     val menuId: Int,
-    val iconRes: Int,
+    val icon: ImageVector,
     val titleRes: Int,
     val section: NavSection
 ) {
-    GOOGLE(R.id.main_menu_google, R.drawable.ic_other, R.string.google_cloud_google, NavSection.ACCOUNTS),
-    STORES(R.id.main_menu_stores, R.drawable.ic_stores, R.string.stores_accounts_title, NavSection.ACCOUNTS),
-    CONTAINERS(R.id.main_menu_containers, R.drawable.ic_containers, R.string.common_ui_containers, NavSection.SYSTEM),
-    PRESETS(R.id.main_menu_settings, R.drawable.ic_presets, R.string.container_presets_title, NavSection.SYSTEM),
-    COMPONENTS(R.id.main_menu_contents, R.drawable.ic_components, R.string.settings_content_components, NavSection.SYSTEM),
-    DRIVERS(R.id.main_menu_adrenotools_gpu_drivers, R.drawable.ic_drivers, R.string.settings_drivers_title, NavSection.SYSTEM),
-    INPUT_CONTROLS(R.id.main_menu_input_controls, R.drawable.ic_input_controls, R.string.common_ui_input_controls, NavSection.SYSTEM),
-    OTHER(R.id.main_menu_other, R.drawable.ic_other, R.string.common_ui_other, NavSection.SYSTEM),
-    DEBUG(R.id.main_menu_advanced, R.drawable.icon_debug, R.string.settings_debug_title, NavSection.TOOLS);
+    GOOGLE(R.id.main_menu_google, Icons.Outlined.AccountCircle, R.string.google_cloud_google, NavSection.ACCOUNTS),
+    STORES(R.id.main_menu_stores, Icons.Outlined.ShoppingBag, R.string.stores_accounts_title, NavSection.ACCOUNTS),
+    CONTAINERS(R.id.main_menu_containers, Icons.Outlined.ViewInAr, R.string.common_ui_containers, NavSection.SYSTEM),
+    PRESETS(R.id.main_menu_settings, Icons.Outlined.Tune, R.string.container_presets_title, NavSection.SYSTEM),
+    COMPONENTS(R.id.main_menu_contents, Icons.Outlined.Extension, R.string.settings_content_components, NavSection.SYSTEM),
+    DRIVERS(R.id.main_menu_adrenotools_gpu_drivers, Icons.Outlined.Memory, R.string.settings_drivers_title, NavSection.SYSTEM),
+    INPUT_CONTROLS(R.id.main_menu_input_controls, Icons.Outlined.SportsEsports, R.string.common_ui_input_controls, NavSection.SYSTEM),
+    OTHER(R.id.main_menu_other, Icons.Outlined.Widgets, R.string.common_ui_other, NavSection.SYSTEM),
+    DEBUG(R.id.main_menu_advanced, Icons.Outlined.BugReport, R.string.settings_debug_title, NavSection.TOOLS);
 
     companion object {
         fun fromMenuId(id: Int): SettingsNavItem? = entries.find { it.menuId == id }
@@ -162,7 +173,7 @@ private fun SidebarHeader(onBackPressed: () -> Unit) {
             .padding(start = 14.dp, end = 14.dp, top = 18.dp, bottom = 6.dp)
     ) {
         Icon(
-            painter = painterResource(R.drawable.ic_back_arrow),
+            imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
             contentDescription = stringResource(R.string.common_ui_back),
             tint = AccentSelected,
             modifier = Modifier.size(22.dp)
@@ -252,7 +263,7 @@ private fun NavItemRow(
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
         Icon(
-            painter = painterResource(item.iconRes),
+            imageVector = item.icon,
             contentDescription = null,
             tint = iconTint,
             modifier = Modifier.size(22.dp)

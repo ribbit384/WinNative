@@ -212,11 +212,13 @@
     <string name="shortcuts_list_error_opening_settings">Error opening shortcut settings</string>
     <string name="shortcuts_list_removed">Shortcut removed successfully.</string>
     <string name="shortcuts_list_remove_failed">Failed to remove the shortcut. Please try again.</string>
+    <string name="shortcuts_list_remove_game_shortcut_message">Remove shortcut\n%1$s</string>
     <string name="shortcuts_list_cloned">Shortcut cloned successfully.</string>
     <string name="shortcuts_list_clone_failed">Failed to clone shortcut.</string>
     <string name="shortcuts_list_exported_to">Shortcut Exported to %1$s</string>
     <string name="shortcuts_list_failed_export">Failed to export shortcut</string>
     <string name="shortcuts_list_added">Shortcut added successfully.</string>
+    <string name="shortcuts_list_readded_existing">Re-added existing shortcut</string>
     <string name="shortcuts_list_failed_add">Failed to add shortcut.</string>
 
     <!-- Shortcuts > Properties -->

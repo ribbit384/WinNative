@@ -38,13 +38,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.FolderShared
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Gamepad
-import androidx.compose.material.icons.filled.Public
-import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.FolderShared
+import androidx.compose.material.icons.outlined.Gamepad
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -139,7 +139,7 @@ fun StoresScreen(
 
         StoreCard(
             name = "Steam",
-            icon = Icons.Filled.Gamepad,
+            icon = Icons.Outlined.Gamepad,
             accentColor = Color(0xFF66C0F4),
             isLoggedIn = state.isSteamLoggedIn,
             onSignIn = onSteamSignIn,
@@ -147,7 +147,7 @@ fun StoresScreen(
         )
         StoreCard(
             name = "Epic Games",
-            icon = Icons.Filled.Gamepad,
+            icon = Icons.Outlined.Gamepad,
             accentColor = Color(0xFF8BAFD4),
             isLoggedIn = state.isEpicLoggedIn,
             onSignIn = onEpicSignIn,
@@ -155,7 +155,7 @@ fun StoresScreen(
         )
         StoreCard(
             name = "GOG",
-            icon = Icons.Filled.Gamepad,
+            icon = Icons.Outlined.Gamepad,
             accentColor = Color(0xFFA855F7),
             isLoggedIn = state.isGogLoggedIn,
             onSignIn = onGogSignIn,
@@ -167,7 +167,7 @@ fun StoresScreen(
         SettingsToggleCard(
             title = stringResource(R.string.stores_accounts_shared_downloads_folder),
             subtitle = stringResource(R.string.stores_accounts_shared_downloads_subtitle),
-            icon = Icons.Filled.FolderShared,
+            icon = Icons.Outlined.FolderShared,
             checked = state.sharedFolder,
             onCheckedChange = onSharedFolderChanged,
         )
@@ -200,7 +200,7 @@ fun StoresScreen(
         SettingsDropdownCard(
             title = stringResource(R.string.stores_accounts_download_speed),
             subtitle = stringResource(R.string.stores_accounts_download_speed_subtitle),
-            icon = Icons.Filled.Speed,
+            icon = Icons.Outlined.Speed,
             selectedValue = state.downloadSpeed,
             options = downloadSpeedOptions,
             onOptionSelected = onDownloadSpeedChanged,
@@ -215,7 +215,7 @@ fun StoresScreen(
         SettingsDropdownCard(
             title = stringResource(R.string.stores_accounts_download_server),
             subtitle = serverSubtitle,
-            icon = Icons.Filled.Public,
+            icon = Icons.Outlined.Public,
             selectedValue = state.downloadServer,
             options = serverOptions,
             onOptionSelected = onDownloadServerChanged,
@@ -560,7 +560,7 @@ private fun SettingsDropdownCard(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Icon(
-                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        imageVector = Icons.Outlined.KeyboardArrowDown,
                         contentDescription = null,
                         tint = selectedColor,
                         modifier = Modifier.size(14.dp),
@@ -632,7 +632,7 @@ private fun FolderPathCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Filled.Folder,
+                    imageVector = Icons.Outlined.Folder,
                     contentDescription = null,
                     tint = Accent,
                     modifier = Modifier.size(17.dp),

@@ -35,15 +35,15 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.Gamepad
-import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.SportsEsports
-import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.CloudDownload
+import androidx.compose.material.icons.outlined.Gamepad
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.SportsEsports
+import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -136,7 +136,7 @@ fun DebugScreen(
         SettingsToggleCard(
             title = stringResource(R.string.common_ui_application),
             subtitle = stringResource(R.string.settings_debug_log_to_file_desc),
-            icon = Icons.Filled.BugReport,
+            icon = Icons.Outlined.BugReport,
             accentColor = Warning,
             checked = state.appDebug,
             onCheckedChange = onAppDebugChanged,
@@ -147,7 +147,7 @@ fun DebugScreen(
         SettingsToggleCard(
             title = stringResource(R.string.settings_debug_wine_logs_title),
             subtitle = stringResource(R.string.settings_debug_wine_logs_subtitle),
-            icon = Icons.Filled.Terminal,
+            icon = Icons.Outlined.Terminal,
             checked = state.wineDebug,
             onCheckedChange = onWineDebugChanged,
         )
@@ -163,7 +163,7 @@ fun DebugScreen(
         SettingsToggleCard(
             title = stringResource(R.string.settings_debug_box_logs_title),
             subtitle = stringResource(R.string.settings_debug_box_logs_subtitle),
-            icon = Icons.Filled.Memory,
+            icon = Icons.Outlined.Memory,
             checked = state.box64Logs,
             onCheckedChange = onBox64LogsChanged,
         )
@@ -171,7 +171,7 @@ fun DebugScreen(
         SettingsToggleCard(
             title = stringResource(R.string.settings_debug_fex_logs_title),
             subtitle = stringResource(R.string.settings_debug_fex_logs_subtitle),
-            icon = Icons.Filled.Memory,
+            icon = Icons.Outlined.Memory,
             checked = state.fexcoreLogs,
             onCheckedChange = onFexcoreLogsChanged,
         )
@@ -181,7 +181,7 @@ fun DebugScreen(
         SettingsToggleCard(
             title = stringResource(R.string.settings_debug_steam_logs_title),
             subtitle = stringResource(R.string.settings_debug_steam_logs_subtitle),
-            icon = Icons.Filled.SportsEsports,
+            icon = Icons.Outlined.SportsEsports,
             checked = state.steamLogs,
             onCheckedChange = onSteamLogsChanged,
         )
@@ -189,7 +189,7 @@ fun DebugScreen(
         SettingsToggleCard(
             title = stringResource(R.string.settings_debug_input_logs),
             subtitle = stringResource(R.string.settings_debug_input_logs_description),
-            icon = Icons.Filled.Gamepad,
+            icon = Icons.Outlined.Gamepad,
             checked = state.inputLogs,
             onCheckedChange = onInputLogsChanged,
         )
@@ -197,7 +197,7 @@ fun DebugScreen(
         SettingsToggleCard(
             title = stringResource(R.string.settings_debug_download_logs),
             subtitle = stringResource(R.string.settings_debug_download_logs_description),
-            icon = Icons.Filled.CloudDownload,
+            icon = Icons.Outlined.CloudDownload,
             checked = state.downloadLogs,
             onCheckedChange = onDownloadLogsChanged,
         )
@@ -310,7 +310,7 @@ private fun WineChannelsCard(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Tune,
+                        imageVector = Icons.Outlined.Tune,
                         contentDescription = null,
                         tint = Accent,
                         modifier = Modifier.size(17.dp),
@@ -397,7 +397,7 @@ private fun ChannelChip(label: String, onRemove: () -> Unit) {
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.Filled.Close,
+                imageVector = Icons.Outlined.Close,
                 contentDescription = stringResource(R.string.settings_debug_remove_channel_desc, label),
                 tint = TextSecondary,
                 modifier = Modifier.size(12.dp),
@@ -626,7 +626,7 @@ private fun ShareLogsButton(onClick: () -> Unit) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                imageVector = Icons.Filled.Share,
+                imageVector = Icons.Outlined.Share,
                 contentDescription = null,
                 tint = Accent,
                 modifier = Modifier.size(16.dp),

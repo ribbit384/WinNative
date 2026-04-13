@@ -204,6 +204,7 @@
     <string name="shortcuts_list_error_opening_settings">Error al abrir los ajustes del acceso directo</string>
     <string name="shortcuts_list_removed">Acceso directo eliminado correctamente.</string>
     <string name="shortcuts_list_remove_failed">Error al eliminar el acceso directo. Por favor, inténtalo de nuevo.</string>
+    <string name="shortcuts_list_remove_game_shortcut_message">Eliminar acceso directo\n%1$s</string>
     <string name="shortcuts_list_cloned">Acceso directo clonado correctamente.</string>
     <string name="shortcuts_list_clone_failed">Error al clonar el acceso directo.</string>
     <string name="shortcuts_list_exported_to">Acceso directo exportado a %1$s</string>

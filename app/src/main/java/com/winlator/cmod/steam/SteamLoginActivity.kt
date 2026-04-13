@@ -19,11 +19,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Gamepad
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Gamepad
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -168,7 +168,7 @@ class SteamLoginActivity : ComponentActivity() {
                     .clip(CircleShape)
                     .background(CardDark.copy(alpha = 0.72f)),
             ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary, modifier = Modifier.size(24.dp))
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back", tint = TextPrimary, modifier = Modifier.size(24.dp))
             }
 
             // Left: credentials
@@ -191,7 +191,7 @@ class SteamLoginActivity : ComponentActivity() {
                             .border(1.dp, Accent.copy(alpha = 0.3f), RoundedCornerShape(11.dp)),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(Icons.Filled.Gamepad, null, tint = Accent, modifier = Modifier.size(22.dp))
+                        Icon(Icons.Outlined.Gamepad, null, tint = Accent, modifier = Modifier.size(22.dp))
                     }
                     Column {
                         Text(stringResource(R.string.stores_accounts_steam_integration_title), color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
@@ -262,7 +262,7 @@ class SteamLoginActivity : ComponentActivity() {
                     trailingIcon = {
                         IconButton(onClick = onTogglePassword) {
                             Icon(
-                                imageVector = if (passwordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                                imageVector = if (passwordVisible) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
                                 contentDescription = null,
                                 tint = TextSecondary,
                             )
@@ -517,7 +517,7 @@ class SteamLoginActivity : ComponentActivity() {
                     .border(1.dp, Accent.copy(alpha = 0.4f), CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.Lock, null, tint = Accent, modifier = Modifier.size(22.dp))
+                Icon(Icons.Outlined.Lock, null, tint = Accent, modifier = Modifier.size(22.dp))
             }
         }
     }

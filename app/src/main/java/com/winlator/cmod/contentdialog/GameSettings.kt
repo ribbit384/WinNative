@@ -17,7 +17,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -48,11 +48,11 @@ import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SportsEsports
 import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
@@ -903,7 +903,7 @@ private fun GeneralSection(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        Icons.Filled.Home,
+                        Icons.Outlined.Home,
                         contentDescription = null,
                         tint = AccentBlue,
                         modifier = Modifier.size(18.dp)
@@ -1105,7 +1105,7 @@ private fun GraphicsDriverConfigCard(
                 Spacer(Modifier.width(8.dp))
             }
             Icon(
-                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                if (expanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
                 contentDescription = null,
                 tint = TextDim,
                 modifier = Modifier.size(20.dp)
@@ -1273,7 +1273,7 @@ private fun ExtensionsMultiSelect(state: GameSettingsStateHolder) {
                 modifier = Modifier.weight(1f)
             )
             Icon(
-                Icons.Filled.KeyboardArrowDown,
+                Icons.Outlined.KeyboardArrowDown,
                 contentDescription = null,
                 tint = TextDim,
                 modifier = Modifier.size(20.dp)
@@ -1459,7 +1459,7 @@ private fun DXVKConfigCard(
                 modifier = Modifier.weight(1f)
             )
             Icon(
-                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                if (expanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
                 contentDescription = null,
                 tint = TextDim,
                 modifier = Modifier.size(20.dp)
@@ -1587,7 +1587,7 @@ private fun WineD3DConfigCard(state: GameSettingsStateHolder) {
                 modifier = Modifier.weight(1f)
             )
             Icon(
-                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                if (expanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
                 contentDescription = null,
                 tint = TextDim,
                 modifier = Modifier.size(20.dp)
@@ -1797,7 +1797,7 @@ private fun WineSection(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        Icons.Filled.KeyboardArrowDown,
+                        Icons.Outlined.KeyboardArrowDown,
                         contentDescription = null,
                         tint = TextSecondary,
                         modifier = Modifier.size(18.dp)
@@ -1899,7 +1899,7 @@ private fun WineSection(
                             )
                             if (state.desktopWallpaperSelected.value) {
                                 Icon(
-                                    Icons.Filled.Check,
+                                    Icons.Outlined.Check,
                                     contentDescription = null,
                                     tint = AccentBlue,
                                     modifier = Modifier.size(18.dp)
@@ -2075,7 +2075,7 @@ private fun VariablesSection(
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Filled.Check, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Outlined.Check, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(16.dp))
                     }
                     Spacer(Modifier.width(4.dp))
                     Box(
@@ -2090,7 +2090,7 @@ private fun VariablesSection(
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Filled.Close, contentDescription = null, tint = DangerRed, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Outlined.Close, contentDescription = null, tint = DangerRed, modifier = Modifier.size(16.dp))
                     }
                 }
             )
@@ -2114,7 +2114,7 @@ private fun VariablesSection(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        Icons.Filled.Add,
+                        Icons.Outlined.Add,
                         contentDescription = null,
                         tint = AccentBlue,
                         modifier = Modifier.size(18.dp)
@@ -2200,7 +2200,7 @@ private fun VariablesSection(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                Icons.Filled.Close,
+                                Icons.Outlined.Close,
                                 contentDescription = null,
                                 tint = DangerRed,
                                 modifier = Modifier.size(16.dp)
@@ -2222,7 +2222,7 @@ private fun VariablesSection(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        Icons.Filled.Add,
+                        Icons.Outlined.Add,
                         contentDescription = null,
                         tint = AccentBlue,
                         modifier = Modifier.size(18.dp)
@@ -2283,7 +2283,7 @@ private fun EnvVarRow(
                         overflow = TextOverflow.Ellipsis
                     )
                     Icon(
-                        Icons.Filled.KeyboardArrowDown,
+                        Icons.Outlined.KeyboardArrowDown,
                         contentDescription = null,
                         tint = TextSecondary,
                         modifier = Modifier.size(16.dp)
@@ -2339,7 +2339,7 @@ private fun EnvVarRow(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    Icons.Filled.Close,
+                    Icons.Outlined.Close,
                     contentDescription = null,
                     tint = DangerRed,
                     modifier = Modifier.size(16.dp)
@@ -2418,7 +2418,7 @@ private fun EnvValueDropdown(
                     overflow = TextOverflow.Ellipsis
                 )
                 Icon(
-                    Icons.Filled.KeyboardArrowDown,
+                    Icons.Outlined.KeyboardArrowDown,
                     contentDescription = null,
                     tint = TextSecondary,
                     modifier = Modifier.size(16.dp)
@@ -2478,7 +2478,7 @@ private fun EnvValueMultiDropdown(
                     overflow = TextOverflow.Ellipsis
                 )
                 Icon(
-                    Icons.Filled.KeyboardArrowDown,
+                    Icons.Outlined.KeyboardArrowDown,
                     contentDescription = null,
                     tint = TextSecondary,
                     modifier = Modifier.size(16.dp)
@@ -2988,7 +2988,7 @@ private fun ExecArgsHelper(onArgSelected: (String) -> Unit) {
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                Icons.Filled.Add,
+                Icons.Outlined.Add,
                 contentDescription = null,
                 tint = TextSecondary,
                 modifier = Modifier.size(18.dp)
@@ -3235,7 +3235,7 @@ private fun SettingDropdown(
                     maxLines = 1
                 )
                 Icon(
-                    Icons.Filled.KeyboardArrowDown,
+                    Icons.Outlined.KeyboardArrowDown,
                     contentDescription = null,
                     tint = TextDim,
                     modifier = Modifier.size(20.dp)

@@ -3,6 +3,7 @@ package com.winlator.cmod.gog.service
 import android.content.Context
 import android.net.Uri
 import androidx.core.net.toUri
+import com.winlator.cmod.LibraryShortcutUtils
 import com.winlator.cmod.PluviaApp
 import com.winlator.cmod.steam.data.DownloadInfo
 import com.winlator.cmod.gog.data.GOGCloudSavesLocation
@@ -483,20 +484,12 @@ class GOGManager @Inject constructor(
                 }
 
                 // Remove any generated per-game shortcuts for this GOG title across containers.
-                val shortcutManager = ContainerManager(context)
-                val gogShortcuts = shortcutManager.loadShortcuts().filter {
-                    it.getExtra("game_source") == "GOG" &&
-                        (it.getExtra("gog_id") == gameId || it.getExtra("app_id") == libraryItem.appId.substringAfterLast("_", ""))
-                }
-                gogShortcuts.forEach { shortcut ->
-                    if (shortcut.file.exists()) {
-                        if (shortcut.file.delete()) {
-                            Timber.i("Deleted GOG shortcut: ${shortcut.file.absolutePath}")
-                        } else {
-                            Timber.w("Failed to delete GOG shortcut: ${shortcut.file.absolutePath}")
-                        }
-                    }
-                }
+                val deletedShortcuts = LibraryShortcutUtils.deleteGogShortcuts(
+                    context = context,
+                    gogId = gameId,
+                    appId = libraryItem.appId.substringAfterLast("_", ""),
+                )
+                Timber.i("Deleted $deletedShortcuts GOG shortcuts for game $gameId")
 
                 // Delete game files
                 if (installDir.exists()) {

@@ -28,8 +28,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -45,7 +50,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -252,7 +256,7 @@ private fun AddContainerCard(onClick: () -> Unit) {
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                painter = painterResource(R.drawable.ic_content_add),
+                imageVector = Icons.Outlined.Add,
                 contentDescription = null,
                 tint = ContainersAccent,
                 modifier = Modifier.size(26.dp),
@@ -295,12 +299,12 @@ private fun ContainerCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconBox(
-                painterRes = R.drawable.ic_containers,
+                image = Icons.Outlined.Inbox,
                 tint = ContainersTextSecondary,
             )
             Spacer(Modifier.weight(1f))
-            SmallIconButton(
-                painterRes = R.drawable.ic_controls_duplicate,
+            SmallVectorIconButton(
+                image = Icons.Outlined.ContentCopy,
                 contentDescription = stringResource(R.string.common_ui_duplicate),
                 tint = ContainersTextSecondary,
                 onClick = onDuplicate,
@@ -367,14 +371,14 @@ private fun ContainerCard(
         ) {
             ActionButton(
                 modifier = Modifier.weight(1f),
-                painterRes = R.drawable.icon_play,
+                image = Icons.Outlined.PlayArrow,
                 contentDescription = stringResource(R.string.common_ui_run),
                 tint = ContainersAccent,
                 onClick = onRun,
             )
             ActionButton(
                 modifier = Modifier.weight(1f),
-                painterRes = R.drawable.ic_controls_edit,
+                image = Icons.Outlined.Edit,
                 contentDescription = stringResource(R.string.common_ui_edit),
                 tint = ContainersTextSecondary,
                 onClick = onEdit,
@@ -385,7 +389,7 @@ private fun ContainerCard(
 
 @Composable
 private fun IconBox(
-    painterRes: Int,
+    image: ImageVector,
     tint: Color,
 ) {
     Box(
@@ -396,7 +400,7 @@ private fun IconBox(
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            painter = painterResource(painterRes),
+            imageVector = image,
             contentDescription = null,
             tint = tint,
             modifier = Modifier.size(20.dp),
@@ -408,7 +412,6 @@ private fun IconBox(
 private fun ContainersDialogShell(
     onDismiss: () -> Unit,
     title: String? = null,
-    iconRes: Int? = null,
     iconImage: ImageVector? = null,
     maxWidth: androidx.compose.ui.unit.Dp = 460.dp,
     content: @Composable () -> Unit,
@@ -448,14 +451,6 @@ private fun ContainersDialogShell(
                             if (iconImage != null) {
                                 Icon(
                                     imageVector = iconImage,
-                                    contentDescription = null,
-                                    tint = ContainersTextPrimary,
-                                    modifier = Modifier.size(22.dp),
-                                )
-                                Spacer(Modifier.width(12.dp))
-                            } else if (iconRes != null) {
-                                Icon(
-                                    painter = painterResource(iconRes),
                                     contentDescription = null,
                                     tint = ContainersTextPrimary,
                                     modifier = Modifier.size(22.dp),
@@ -864,35 +859,6 @@ private fun formatUsedPercent(percent: Float): String {
 }
 
 @Composable
-private fun SmallIconButton(
-    painterRes: Int,
-    contentDescription: String,
-    tint: Color,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .size(34.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(ContainersSubcard)
-            .border(1.dp, ContainersOutline, RoundedCornerShape(8.dp))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            painter = painterResource(painterRes),
-            contentDescription = contentDescription,
-            tint = tint,
-            modifier = Modifier.size(18.dp),
-        )
-    }
-}
-
-@Composable
 private fun SmallVectorIconButton(
     image: androidx.compose.ui.graphics.vector.ImageVector,
     contentDescription: String,
@@ -924,7 +890,7 @@ private fun SmallVectorIconButton(
 @Composable
 private fun ActionButton(
     modifier: Modifier = Modifier,
-    painterRes: Int,
+    image: ImageVector,
     contentDescription: String,
     tint: Color,
     onClick: () -> Unit,
@@ -943,7 +909,7 @@ private fun ActionButton(
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            painter = painterResource(painterRes),
+            imageVector = image,
             contentDescription = contentDescription,
             tint = tint,
             modifier = Modifier.size(18.dp),

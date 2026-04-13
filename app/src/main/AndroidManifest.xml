@@ -115,6 +115,7 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="${applicationId}.SHORTCUT_ADDED" />
+                <action android:name="${applicationId}.PIN_SHORTCUT_RESULT" />
             </intent-filter>
         </receiver>
 

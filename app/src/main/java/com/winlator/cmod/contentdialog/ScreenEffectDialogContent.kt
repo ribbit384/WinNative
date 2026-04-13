@@ -18,9 +18,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
@@ -327,7 +327,7 @@ private fun ProfileSelector(
                 maxLines = 1
             )
             Icon(
-                Icons.Filled.KeyboardArrowDown,
+                Icons.Outlined.KeyboardArrowDown,
                 contentDescription = null,
                 tint = TextSecondary,
                 modifier = Modifier.size(20.dp)
@@ -345,7 +345,7 @@ private fun ProfileSelector(
                 .clickable { onAdd() },
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Filled.Add, contentDescription = "Add profile", tint = TextPrimary, modifier = Modifier.size(19.dp))
+            Icon(Icons.Outlined.Add, contentDescription = "Add profile", tint = TextPrimary, modifier = Modifier.size(19.dp))
         }
         Spacer(Modifier.width(10.dp))
         Box(
@@ -356,7 +356,7 @@ private fun ProfileSelector(
                 .clickable { onRemove() },
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Filled.Delete, contentDescription = "Remove profile", tint = TextPrimary, modifier = Modifier.size(19.dp))
+            Icon(Icons.Outlined.Delete, contentDescription = "Remove profile", tint = TextPrimary, modifier = Modifier.size(19.dp))
         }
     }
 }

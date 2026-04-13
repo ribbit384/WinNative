@@ -204,6 +204,7 @@
     <string name="shortcuts_list_error_opening_settings">Fejl ved åbning af genvejsindstillinger</string>
     <string name="shortcuts_list_removed">Genvej fjernet.</string>
     <string name="shortcuts_list_remove_failed">Kunne ikke fjerne genvejen. Prøv venligst igen.</string>
+    <string name="shortcuts_list_remove_game_shortcut_message">Fjern genvej\n%1$s</string>
     <string name="shortcuts_list_cloned">Genvej klonet.</string>
     <string name="shortcuts_list_clone_failed">Kunne ikke klone genvej.</string>
     <string name="shortcuts_list_exported_to">Genvej eksporteret til %1$s</string>

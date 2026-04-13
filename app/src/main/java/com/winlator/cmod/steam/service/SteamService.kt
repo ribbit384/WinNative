@@ -7,6 +7,7 @@ import android.os.IBinder
 import android.widget.Toast
 import androidx.room.withTransaction
 import com.winlator.cmod.BuildConfig
+import com.winlator.cmod.LibraryShortcutUtils
 import com.winlator.cmod.R
 import com.winlator.cmod.utils.NetworkMonitor
 import com.winlator.cmod.PluviaApp
@@ -982,6 +983,7 @@ class SteamService : Service(), IChallengeUrlChanged {
                     if (dirFile.exists() && dirFile.isDirectory) {
                         deleteRecursivelyWithRetries(dirFile)
                     }
+                    LibraryShortcutUtils.deleteSteamShortcuts(PluviaApp.instance, appId)
                     PluviaApp.events.emit(AndroidEvent.LibraryInstallStatusChanged(appId))
                     withContext(kotlinx.coroutines.Dispatchers.Main) {
                         onComplete(true)

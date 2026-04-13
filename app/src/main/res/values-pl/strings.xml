@@ -204,6 +204,7 @@
     <string name="shortcuts_list_error_opening_settings">Błąd podczas otwierania ustawień skrótu</string>
     <string name="shortcuts_list_removed">Skrót usunięty pomyślnie.</string>
     <string name="shortcuts_list_remove_failed">Nie udało się usunąć skrótu. Spróbuj ponownie.</string>
+    <string name="shortcuts_list_remove_game_shortcut_message">Usuń skrót\n%1$s</string>
     <string name="shortcuts_list_cloned">Skrót sklonowany pomyślnie.</string>
     <string name="shortcuts_list_clone_failed">Nie udało się sklonować skrótu.</string>
     <string name="shortcuts_list_exported_to">Skrót wyeksportowany do %1$s</string>

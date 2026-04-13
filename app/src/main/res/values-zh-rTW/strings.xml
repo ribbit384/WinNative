@@ -204,6 +204,7 @@
     <string name="shortcuts_list_error_opening_settings">開啟捷徑設定時發生錯誤</string>
     <string name="shortcuts_list_removed">捷徑已成功移除。</string>
     <string name="shortcuts_list_remove_failed">無法移除捷徑。請重試。</string>
+    <string name="shortcuts_list_remove_game_shortcut_message">移除捷徑\n%1$s</string>
     <string name="shortcuts_list_cloned">捷徑已成功複製。</string>
     <string name="shortcuts_list_clone_failed">無法複製捷徑。</string>
     <string name="shortcuts_list_exported_to">捷徑已匯出至 %1$s</string>

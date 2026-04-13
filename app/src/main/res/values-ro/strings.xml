@@ -204,6 +204,7 @@
     <string name="shortcuts_list_error_opening_settings">Eroare la deschiderea setarilor comenzii rapide</string>
     <string name="shortcuts_list_removed">Comanda rapida eliminata cu succes.</string>
     <string name="shortcuts_list_remove_failed">Nu s-a putut elimina comanda rapida. Te rugam sa incerci din nou.</string>
+    <string name="shortcuts_list_remove_game_shortcut_message">Elimină comanda rapidă\n%1$s</string>
     <string name="shortcuts_list_cloned">Comanda rapida clonata cu succes.</string>
     <string name="shortcuts_list_clone_failed">Nu s-a putut clona comanda rapida.</string>
     <string name="shortcuts_list_exported_to">Comanda rapida exportata in %1$s</string>

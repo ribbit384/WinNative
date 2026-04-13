@@ -5,11 +5,12 @@ import static com.winlator.cmod.ShortcutsScreenKt.setupShortcutsComposeView;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.IntentSender;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
+import android.content.SharedPreferences;
 import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.Build;
@@ -33,6 +34,7 @@ import com.winlator.cmod.container.ContainerManager;
 import com.winlator.cmod.container.Shortcut;
 import com.winlator.cmod.contentdialog.ContentDialog;
 import com.winlator.cmod.contentdialog.ShortcutSettingsComposeDialog;
+import com.winlator.cmod.core.AppUtils;
 import com.winlator.cmod.core.FileUtils;
 import com.winlator.cmod.ui.dialog.WinNativeComposeDialogs;
 
@@ -43,9 +45,16 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 public class ShortcutsFragment extends Fragment {
+    public enum PinShortcutResult {
+        FAILED,
+        REQUESTED_NEW,
+        REUSED_EXISTING
+    }
+
     private ComposeView composeView;
     private ContainerManager manager;
     private List<Shortcut> shortcuts = Collections.emptyList();
@@ -62,18 +71,22 @@ public class ShortcutsFragment extends Fragment {
                 new ShortcutSettingsComposeDialog(ShortcutsFragment.this, shortcut).show();
             } catch (Throwable e) {
                 Log.e("ShortcutsFragment", "Error opening shortcut settings", e);
-                Toast.makeText(getContext(), R.string.shortcuts_list_error_opening_settings, Toast.LENGTH_SHORT).show();
+                AppUtils.showToast(getContext(), R.string.shortcuts_list_error_opening_settings);
             }
         }
 
         @Override
         public void onAddToHomeScreen(Shortcut shortcut) {
-            boolean added = addShortcutToScreen(shortcut);
-            Toast.makeText(
-                    requireContext(),
-                    added ? R.string.shortcuts_list_added : R.string.shortcuts_list_failed_add,
-                    Toast.LENGTH_SHORT
-            ).show();
+            PinShortcutResult result = addShortcutToScreen(shortcut);
+            if (result == PinShortcutResult.REUSED_EXISTING) {
+                AppUtils.showToast(requireContext(), R.string.shortcuts_list_readded_existing, shortcut.icon);
+            }
+            else {
+                AppUtils.showToast(
+                        requireContext(),
+                        result == PinShortcutResult.REQUESTED_NEW ? R.string.shortcuts_list_added : R.string.shortcuts_list_failed_add
+                );
+            }
         }
 
         @Override
@@ -152,9 +165,9 @@ public class ShortcutsFragment extends Fragment {
             if (fileDeleted) {
                 disableShortcutOnScreen(requireContext(), shortcut);
                 loadShortcutsList();
-                Toast.makeText(context, R.string.shortcuts_list_removed, Toast.LENGTH_SHORT).show();
+                AppUtils.showToast(context, R.string.shortcuts_list_removed);
             } else {
-                Toast.makeText(context, R.string.shortcuts_list_remove_failed, Toast.LENGTH_SHORT).show();
+                AppUtils.showToast(context, R.string.shortcuts_list_remove_failed);
             }
         });
     }
@@ -167,10 +180,10 @@ public class ShortcutsFragment extends Fragment {
         ArrayList<Container> containers = containerManager.getContainers();
         showContainerSelectionDialog(containers, selectedContainer -> {
             if (shortcut.cloneToContainer(selectedContainer)) {
-                Toast.makeText(context, R.string.shortcuts_list_cloned, Toast.LENGTH_SHORT).show();
+                AppUtils.showToast(context, R.string.shortcuts_list_cloned);
                 loadShortcutsList();
             } else {
-                Toast.makeText(context, R.string.shortcuts_list_clone_failed, Toast.LENGTH_SHORT).show();
+                AppUtils.showToast(context, R.string.shortcuts_list_clone_failed);
             }
         });
     }
@@ -213,7 +226,7 @@ public class ShortcutsFragment extends Fragment {
             Uri folderUri = Uri.parse(uriString);
             DocumentFile pickedDir = DocumentFile.fromTreeUri(getContext(), folderUri);
             if (pickedDir == null || !pickedDir.canWrite()) {
-                Toast.makeText(getContext(), R.string.common_ui_cannot_write_folder, Toast.LENGTH_SHORT).show();
+                AppUtils.showToast(getContext(), R.string.common_ui_cannot_write_folder);
                 return;
             }
             shortcutsDir = new File(FileUtils.getFilePathFromUri(getContext(), folderUri));
@@ -222,7 +235,7 @@ public class ShortcutsFragment extends Fragment {
         }
 
         if (!shortcutsDir.exists() && !shortcutsDir.mkdirs()) {
-            Toast.makeText(getContext(), R.string.common_ui_failed_create_directory, Toast.LENGTH_SHORT).show();
+            AppUtils.showToast(getContext(), R.string.common_ui_failed_create_directory);
             return;
         }
 
@@ -259,10 +272,10 @@ public class ShortcutsFragment extends Fragment {
             String message = fileExists
                     ? getString(R.string.shortcuts_properties_updated_at, exportFile.getPath())
                     : getString(R.string.shortcuts_list_exported_to, exportFile.getPath());
-            Toast.makeText(getContext(), message, Toast.LENGTH_LONG).show();
+            AppUtils.showToast(getContext(), message);
         } catch (IOException e) {
             Log.e("ShortcutsFragment", "Failed to export shortcut", e);
-            Toast.makeText(getContext(), R.string.shortcuts_list_failed_export, Toast.LENGTH_LONG).show();
+            AppUtils.showToast(getContext(), R.string.shortcuts_list_failed_export);
         }
     }
 
@@ -292,19 +305,54 @@ public class ShortcutsFragment extends Fragment {
                 playtimeText,
                 () -> {
                     playtimePrefs.edit().remove(playtimeKey).remove(playCountKey).apply();
-                    Toast.makeText(getContext(), R.string.shortcuts_properties_properties_reset, Toast.LENGTH_SHORT).show();
+                    AppUtils.showToast(getContext(), R.string.shortcuts_properties_properties_reset);
                 })) {
             return;
         }
     }
 
-    private ShortcutInfo buildScreenShortCut(String shortLabel, String longLabel, int containerId, String shortcutPath, Icon icon, String uuid) {
-        Intent intent = new Intent(getActivity(), XServerDisplayActivity.class);
+    public static ArrayList<String> buildPinnedShortcutIds(int containerId, String uuid, String shortcutPath) {
+        LinkedHashSet<String> shortcutIds = new LinkedHashSet<>();
+        if (uuid != null && !uuid.isEmpty()) {
+            shortcutIds.add(uuid); // Legacy pinned shortcut id.
+            if (shortcutPath != null && !shortcutPath.isEmpty() && containerId > 0) {
+                int shortcutPathHash = shortcutPath.hashCode();
+                shortcutIds.add(
+                        "shortcut_" + containerId + "_" + uuid + "_" + Integer.toUnsignedString(shortcutPathHash, 16)
+                );
+            }
+        }
+        return new ArrayList<>(shortcutIds);
+    }
+
+    public static Intent buildShortcutLaunchIntent(Context context, int containerId, String shortcutPath, String shortcutName, String uuid) {
+        Intent intent = new Intent(context, XServerDisplayActivity.class);
         intent.setAction(Intent.ACTION_VIEW);
+        if (shortcutPath != null && !shortcutPath.isEmpty()) {
+            int shortcutPathHash = shortcutPath.hashCode();
+            Uri launchData = new Uri.Builder()
+                    .scheme("winnative")
+                    .authority(BuildConfig.APPLICATION_ID)
+                    .appendPath("shortcut")
+                    .appendQueryParameter("uuid", uuid)
+                    .appendQueryParameter("container", String.valueOf(containerId))
+                    .appendQueryParameter("hash", String.valueOf(shortcutPathHash))
+                    .build();
+            intent.setData(launchData);
+            intent.putExtra("shortcut_path_hash", shortcutPathHash);
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         intent.putExtra("container_id", containerId);
         intent.putExtra("shortcut_path", shortcutPath);
+        intent.putExtra("shortcut_name", shortcutName);
+        intent.putExtra("shortcut_uuid", uuid);
+        return intent;
+    }
 
-        return new ShortcutInfo.Builder(getActivity(), uuid)
+    private ShortcutInfo buildScreenShortCut(String shortcutId, String shortLabel, String longLabel, Intent intent, Icon icon) {
+        Context context = requireContext();
+
+        return new ShortcutInfo.Builder(context, shortcutId)
                 .setShortLabel(shortLabel)
                 .setLongLabel(longLabel)
                 .setIcon(icon)
@@ -312,48 +360,120 @@ public class ShortcutsFragment extends Fragment {
                 .build();
     }
 
-    public boolean addShortcutToScreen(Shortcut shortcut) {
-        if (shortcut == null) return false;
+    public static PinShortcutResult pinOrUpdateShortcut(ShortcutManager shortcutManager, ShortcutInfo shortcutInfo, List<String> shortcutIds, @Nullable IntentSender callback) {
+        if (shortcutManager == null || shortcutInfo == null || shortcutIds == null || shortcutIds.isEmpty()) return PinShortcutResult.FAILED;
+
+        try {
+            for (ShortcutInfo pinnedShortcut : shortcutManager.getPinnedShortcuts()) {
+                if (!shortcutIds.contains(pinnedShortcut.getId())) continue;
+
+                shortcutManager.updateShortcuts(Collections.singletonList(shortcutInfo));
+                try {
+                    shortcutManager.enableShortcuts(Collections.singletonList(pinnedShortcut.getId()));
+                } catch (Exception ignored) {
+                }
+                return PinShortcutResult.REUSED_EXISTING;
+            }
+        } catch (Exception ignored) {
+        }
+
+        try {
+            return shortcutManager.requestPinShortcut(shortcutInfo, callback)
+                    ? PinShortcutResult.REQUESTED_NEW
+                    : PinShortcutResult.FAILED;
+        } catch (IllegalArgumentException e) {
+            try {
+                shortcutManager.updateShortcuts(Collections.singletonList(shortcutInfo));
+                shortcutManager.enableShortcuts(Collections.singletonList(shortcutInfo.getId()));
+                return PinShortcutResult.REUSED_EXISTING;
+            } catch (Exception ignored) {
+            }
+        } catch (Exception ignored) {
+        }
+
+        return PinShortcutResult.FAILED;
+    }
+
+    public PinShortcutResult addShortcutToScreen(Shortcut shortcut) {
+        if (shortcut == null) return PinShortcutResult.FAILED;
         if (shortcut.getExtra("uuid").equals("")) {
             shortcut.genUUID();
         }
+        String shortcutUuid = shortcut.getExtra("uuid");
+        String shortcutPath = shortcut.file != null ? shortcut.file.getAbsolutePath() : "";
+        ArrayList<String> shortcutIds = buildPinnedShortcutIds(shortcut.container.id, shortcutUuid, shortcutPath);
+        if (shortcutIds.isEmpty()) return PinShortcutResult.FAILED;
+
         ShortcutManager shortcutManager = getSystemService(requireContext(), ShortcutManager.class);
-        if (shortcutManager == null || !shortcutManager.isRequestPinShortcutSupported()) return false;
+        if (shortcutManager == null || !shortcutManager.isRequestPinShortcutSupported()) return PinShortcutResult.FAILED;
 
         Icon shortcutIcon = shortcut.icon != null
                 ? Icon.createWithBitmap(shortcut.icon)
                 : Icon.createWithResource(requireContext(), R.drawable.icon_shortcut);
 
-        return shortcutManager.requestPinShortcut(
+        return pinOrUpdateShortcut(
+                shortcutManager,
                 buildScreenShortCut(
+                        shortcutIds.get(shortcutIds.size() - 1),
                         shortcut.name,
                         shortcut.name,
-                        shortcut.container.id,
-                        shortcut.file.getPath(),
-                        shortcutIcon,
-                        shortcut.getExtra("uuid")),
+                        buildShortcutLaunchIntent(requireContext(), shortcut.container.id, shortcutPath, shortcut.name, shortcutUuid),
+                        shortcutIcon),
+                shortcutIds,
                 null
         );
     }
 
     public static void disableShortcutOnScreen(Context context, Shortcut shortcut) {
         ShortcutManager shortcutManager = getSystemService(context, ShortcutManager.class);
+        if (shortcutManager == null || shortcut == null || shortcut.container == null || shortcut.file == null) return;
+
+        ArrayList<String> shortcutIds = buildPinnedShortcutIds(
+                shortcut.container.id,
+                shortcut.getExtra("uuid"),
+                shortcut.file.getAbsolutePath()
+        );
+        if (shortcutIds.isEmpty()) return;
+
         try {
             shortcutManager.disableShortcuts(
-                    Collections.singletonList(shortcut.getExtra("uuid")),
+                    shortcutIds,
                     context.getString(R.string.shortcuts_list_not_available)
             );
         } catch (Exception ignored) {
+        }
+
+        try {
+            shortcutManager.removeDynamicShortcuts(shortcutIds);
+        } catch (Exception ignored) {
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                shortcutManager.removeLongLivedShortcuts(shortcutIds);
+            } catch (Exception ignored) {
+            }
         }
     }
 
     public void updateShortcutOnScreen(String shortLabel, String longLabel, int containerId, String shortcutPath, Icon icon, String uuid) {
         ShortcutManager shortcutManager = getSystemService(requireContext(), ShortcutManager.class);
+        if (shortcutManager == null) return;
+
+        ArrayList<String> shortcutIds = buildPinnedShortcutIds(containerId, uuid, shortcutPath);
+        if (shortcutIds.isEmpty()) return;
+
         try {
             for (ShortcutInfo shortcutInfo : shortcutManager.getPinnedShortcuts()) {
-                if (shortcutInfo.getId().equals(uuid)) {
+                if (shortcutIds.contains(shortcutInfo.getId())) {
                     shortcutManager.updateShortcuts(Collections.singletonList(
-                            buildScreenShortCut(shortLabel, longLabel, containerId, shortcutPath, icon, uuid)));
+                            buildScreenShortCut(
+                                    shortcutInfo.getId(),
+                                    shortLabel,
+                                    longLabel,
+                                    buildShortcutLaunchIntent(requireContext(), containerId, shortcutPath, shortLabel, uuid),
+                                    icon
+                            )));
                     break;
                 }
             }

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import com.winlator.cmod.BuildConfig
+import com.winlator.cmod.LibraryShortcutUtils
 import com.winlator.cmod.R
 import com.winlator.cmod.steam.data.DownloadInfo
 import com.winlator.cmod.steam.enums.DownloadPhase
@@ -258,19 +259,8 @@ class EpicService : Service() {
 
                 // Delete game shortcuts but preserve the created containers
                 withContext(Dispatchers.IO) {
-                    val containerManager = com.winlator.cmod.container.ContainerManager(context)
-                    val shortcuts = containerManager.loadShortcuts()
-                    
-                    Timber.tag("Epic").d("Scanning ${shortcuts.size} shortcuts for game $appId")
-                    shortcuts.forEach { shortcut ->
-                        val source = shortcut.getExtra("game_source")
-                        val shortcutAppId = shortcut.getExtra("app_id")
-                        
-                        if (source == "EPIC" && shortcutAppId == appId.toString()) {
-                            Timber.tag("Epic").d("Deleting shortcut file: ${shortcut.file.absolutePath}")
-                            shortcut.file.delete()
-                        }
-                    }
+                    val deletedCount = LibraryShortcutUtils.deleteEpicShortcuts(context, appId)
+                    Timber.tag("Epic").d("Deleted $deletedCount Epic shortcuts for appId=$appId")
                 }
 
                 // Trigger library refresh event

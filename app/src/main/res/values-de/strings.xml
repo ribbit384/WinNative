@@ -204,6 +204,7 @@
     <string name="shortcuts_list_error_opening_settings">Fehler beim Öffnen der Verknüpfungseinstellungen</string>
     <string name="shortcuts_list_removed">Verknüpfung erfolgreich entfernt.</string>
     <string name="shortcuts_list_remove_failed">Verknüpfung konnte nicht entfernt werden. Bitte versuche es erneut.</string>
+    <string name="shortcuts_list_remove_game_shortcut_message">Verknüpfung entfernen\n%1$s</string>
     <string name="shortcuts_list_cloned">Verknüpfung erfolgreich geklont.</string>
     <string name="shortcuts_list_clone_failed">Verknüpfung konnte nicht geklont werden.</string>
     <string name="shortcuts_list_exported_to">Verknüpfung exportiert nach %1$s</string>

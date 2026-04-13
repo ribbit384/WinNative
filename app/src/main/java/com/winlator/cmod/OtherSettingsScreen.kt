@@ -30,20 +30,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Autorenew
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.Monitor
-import androidx.compose.material.icons.filled.Mouse
-import androidx.compose.material.icons.filled.OpenInBrowser
-import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.SportsEsports
-import androidx.compose.material.icons.filled.SystemUpdate
-import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.outlined.Autorenew
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.LibraryMusic
+import androidx.compose.material.icons.outlined.Monitor
+import androidx.compose.material.icons.outlined.Mouse
+import androidx.compose.material.icons.outlined.OpenInBrowser
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.SportsEsports
+import androidx.compose.material.icons.outlined.SystemUpdate
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -163,7 +163,7 @@ fun OtherSettingsScreen(
         SettingsDropdownCard(
             title = stringResource(R.string.settings_other_language_title),
             subtitle = stringResource(R.string.settings_other_language_summary),
-            icon = Icons.Filled.Language,
+            icon = Icons.Outlined.Language,
             options = state.languageLabels,
             selectedIndex = state.languageIndex,
             onOptionSelected = onLanguageSelected,
@@ -174,7 +174,7 @@ fun OtherSettingsScreen(
         SettingsDropdownCard(
             title = stringResource(R.string.settings_general_refresh_rate),
             subtitle = stringResource(R.string.settings_general_refresh_rate_summary),
-            icon = Icons.Filled.Monitor,
+            icon = Icons.Outlined.Monitor,
             options = state.refreshRateLabels,
             selectedIndex = state.refreshRateIndex,
             onOptionSelected = onRefreshRateSelected,
@@ -213,7 +213,7 @@ fun OtherSettingsScreen(
         SettingsToggleCard(
             title = stringResource(R.string.session_xserver_use_dri3_extension),
             subtitle = stringResource(R.string.session_xserver_use_dri3_description),
-            icon = Icons.Filled.Visibility,
+            icon = Icons.Outlined.Visibility,
             checked = state.useDRI3,
             onCheckedChange = onUseDRI3Changed,
         )
@@ -221,7 +221,7 @@ fun OtherSettingsScreen(
         SettingsToggleCard(
             title = stringResource(R.string.settings_general_cursor_lock_title),
             subtitle = stringResource(R.string.settings_general_cursor_lock_summary),
-            icon = Icons.Filled.Mouse,
+            icon = Icons.Outlined.Mouse,
             checked = state.cursorLock,
             onCheckedChange = onCursorLockChanged,
         )
@@ -229,7 +229,7 @@ fun OtherSettingsScreen(
         SettingsToggleCard(
             title = stringResource(R.string.settings_general_xinput_toggle_title),
             subtitle = stringResource(R.string.settings_general_xinput_toggle_summary),
-            icon = Icons.Filled.SportsEsports,
+            icon = Icons.Outlined.SportsEsports,
             checked = state.xinputDisabled,
             onCheckedChange = onXinputDisabledChanged,
         )
@@ -239,7 +239,7 @@ fun OtherSettingsScreen(
         SettingsToggleCard(
             title = stringResource(R.string.settings_general_enable_file_provider),
             subtitle = stringResource(R.string.settings_general_file_provider_summary),
-            icon = Icons.Filled.Folder,
+            icon = Icons.Outlined.Folder,
             checked = state.enableFileProvider,
             onCheckedChange = onEnableFileProviderChanged,
         )
@@ -247,7 +247,7 @@ fun OtherSettingsScreen(
         SettingsToggleCard(
             title = stringResource(R.string.settings_general_open_with_android_browser),
             subtitle = stringResource(R.string.settings_general_open_browser_summary),
-            icon = Icons.Filled.OpenInBrowser,
+            icon = Icons.Outlined.OpenInBrowser,
             checked = state.openInBrowser,
             onCheckedChange = onOpenInBrowserChanged,
         )
@@ -255,7 +255,7 @@ fun OtherSettingsScreen(
         SettingsToggleCard(
             title = stringResource(R.string.settings_general_share_android_clipboard),
             subtitle = stringResource(R.string.settings_general_clipboard_summary),
-            icon = Icons.Filled.ContentCopy,
+            icon = Icons.Outlined.ContentCopy,
             checked = state.shareClipboard,
             onCheckedChange = onShareClipboardChanged,
         )
@@ -365,7 +365,7 @@ private fun UpdatesCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Filled.SystemUpdate,
+                    imageVector = Icons.Outlined.SystemUpdate,
                     contentDescription = null,
                     tint = Accent,
                     modifier = Modifier.size(17.dp),
@@ -482,7 +482,7 @@ private fun SettingsDropdownCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Icon(
-                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        imageVector = Icons.Outlined.KeyboardArrowDown,
                         contentDescription = null,
                         tint = accentColor,
                         modifier = Modifier.size(14.dp),
@@ -560,7 +560,7 @@ private fun SoundFontCard(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.LibraryMusic,
+                        imageVector = Icons.Outlined.LibraryMusic,
                         contentDescription = null,
                         tint = Accent,
                         modifier = Modifier.size(17.dp),
@@ -617,7 +617,7 @@ private fun SoundFontCard(
                             modifier = Modifier.weight(1f),
                         )
                         Icon(
-                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            imageVector = Icons.Outlined.KeyboardArrowDown,
                             contentDescription = null,
                             tint = Accent,
                             modifier = Modifier.size(14.dp),
@@ -694,7 +694,7 @@ private fun FolderPathCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Filled.Folder,
+                    imageVector = Icons.Outlined.Folder,
                     contentDescription = null,
                     tint = Accent,
                     modifier = Modifier.size(17.dp),
@@ -748,7 +748,7 @@ private fun CursorSpeedCard(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Speed,
+                        imageVector = Icons.Outlined.Speed,
                         contentDescription = null,
                         tint = Accent,
                         modifier = Modifier.size(17.dp),
@@ -820,7 +820,7 @@ private fun ReinstallImagefsConfirmDialog(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Autorenew,
+                            imageVector = Icons.Outlined.Autorenew,
                             contentDescription = null,
                             tint = Accent,
                             modifier = Modifier.size(19.dp),
@@ -902,7 +902,7 @@ private fun ImagefsInstallProgressDialog(percent: Int) {
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Autorenew,
+                            imageVector = Icons.Outlined.Autorenew,
                             contentDescription = null,
                             tint = Accent,
                             modifier = Modifier.size(19.dp),
@@ -973,7 +973,7 @@ private fun ReinstallImagefsCard(onClick: () -> Unit) {
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Autorenew,
+                        imageVector = Icons.Outlined.Autorenew,
                         contentDescription = null,
                         tint = Accent,
                         modifier = Modifier.size(17.dp),
@@ -1026,7 +1026,7 @@ private fun ReinstallButton(onClick: () -> Unit) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                imageVector = Icons.Filled.Refresh,
+                imageVector = Icons.Outlined.Refresh,
                 contentDescription = null,
                 tint = Accent,
                 modifier = Modifier.size(16.dp),

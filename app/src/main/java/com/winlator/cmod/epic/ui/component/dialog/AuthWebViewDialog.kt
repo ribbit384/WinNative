@@ -10,7 +10,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -83,7 +83,7 @@ fun AuthWebViewDialog(
                                         webViewState.clear()
                                         onDismissRequest()
                                     },
-                                    content = { Icon(imageVector = Icons.Default.Close, contentDescription = stringResource(R.string.common_ui_close)) },
+                                    content = { Icon(imageVector = Icons.Outlined.Close, contentDescription = stringResource(R.string.common_ui_close)) },
                                 )
                             },
                         )

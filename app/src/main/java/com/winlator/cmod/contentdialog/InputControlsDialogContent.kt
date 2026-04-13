@@ -15,8 +15,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
@@ -270,7 +270,7 @@ private fun ProfileRow(
                 maxLines = 1
             )
             Icon(
-                Icons.Filled.KeyboardArrowDown,
+                Icons.Outlined.KeyboardArrowDown,
                 contentDescription = null,
                 tint = TextSecondary,
                 modifier = Modifier.size(20.dp)
@@ -290,7 +290,7 @@ private fun ProfileRow(
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                Icons.Filled.Settings,
+                Icons.Outlined.Settings,
                 contentDescription = "Settings",
                 tint = TextPrimary,
                 modifier = Modifier.size(19.dp)

@@ -1,6 +1,7 @@
 package com.winlator.cmod
 
 import android.app.Activity
+import android.app.PendingIntent
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -64,8 +65,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.LibraryBooks
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -1585,36 +1584,24 @@ class UnifiedActivity : AppCompatActivity() {
                     val cm = ContainerManager(context)
                     val allShortcuts = cm.loadShortcuts()
                     val apps = allShortcuts
-                        .map { shortcut ->
-                            val gameSource = shortcut.getExtra("game_source", "CUSTOM")
-                            val displayName = if (gameSource == "CUSTOM") shortcut.getExtra("custom_name", shortcut.name) else shortcut.name
-                            val steamId = shortcut.getExtra("app_id", "0").toIntOrNull() ?: 0
-                            
-                            val isOfficialSteam = steamId > 0 && steamApps.any { it.id == steamId }
-                            val isOfficialEpic = gameSource == "EPIC" && epicApps.any { it.id.toString() == shortcut.getExtra("app_id") }
-                            val isOfficialGog = gameSource == "GOG" && gogApps.any { it.id == shortcut.getExtra("gog_id") }
-
-                            val customId = if (gameSource == "STEAM" && !isOfficialSteam) {
-                                -(displayName.hashCode().and(0x7FFFFFFF) + 1)
-                            } else if (gameSource == "STEAM") {
-                                steamId
-                            } else {
-                                -(displayName.hashCode().and(0x7FFFFFFF) + 1)
+                        .mapNotNull { shortcut ->
+                            if (!LibraryShortcutUtils.isCustomLibraryShortcut(shortcut)) {
+                                return@mapNotNull null
                             }
-                            
+
+                            val displayName = shortcut.getExtra("custom_name", shortcut.name)
+                                .ifBlank { shortcut.name }
+                            val customId = -(displayName.hashCode().and(0x7FFFFFFF) + 1)
+
                             SteamApp(
                                 id = customId,
                                 name = displayName,
-                                developer = if (gameSource == "CUSTOM") "Custom" else gameSource,
-                                gameDir = shortcut.getExtra("game_install_path", shortcut.getExtra("custom_game_folder", ""))
+                                developer = "Custom",
+                                gameDir = shortcut.getExtra(
+                                    "game_install_path",
+                                    shortcut.getExtra("custom_game_folder", "")
+                                )
                             )
-                        }
-                        .filter { app -> 
-                            // Only include as 'customApps' if it's not already handled by official Steam/Epic/Gog lists
-                            val isOfficial = (app.id > 0 && steamApps.any { it.id == app.id }) ||
-                                            epicApps.any { it.title == app.name } ||
-                                            gogApps.any { it.title == app.name }
-                            !isOfficial || app.id < 0
                         }
                     withContext(Dispatchers.Main) {
                         cachedShortcuts = allShortcuts
@@ -1971,10 +1958,16 @@ class UnifiedActivity : AppCompatActivity() {
 
     private enum class GameSettingsScreen {
         Menu,
+        Shortcut,
         Saves,
         CloudSaves,
         Uninstall,
     }
+
+    private data class HomeShortcutUiState(
+        val shortcut: Shortcut? = null,
+        val isPinned: Boolean = false,
+    )
 
     private data class GameSettingsActionItem(
         val title: String,
@@ -2166,6 +2159,54 @@ class UnifiedActivity : AppCompatActivity() {
         }
     }
 
+    @Composable
+    private fun ShortcutRemovalConfirmation(
+        message: String,
+        onConfirm: () -> Unit,
+        onCancel: () -> Unit,
+    ) {
+        var isRemoving by remember { mutableStateOf(false) }
+
+        GameSettingsInfoCard(message = message, accentColor = DangerRed)
+
+        if (isRemoving) {
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = DangerRed)
+            }
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        isRemoving = true
+                        onConfirm()
+                    },
+                    border = BorderStroke(1.dp, DangerRed.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = DangerRed),
+                ) {
+                    Text(
+                        stringResource(R.string.common_ui_remove),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = onCancel) {
+                    Text(stringResource(R.string.common_ui_cancel), color = TextSecondary, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+
     // Game Settings Dialog
     @Composable
     private fun GameSettingsDialog(app: SteamApp, onDismissRequest: () -> Unit) {
@@ -2175,6 +2216,8 @@ class UnifiedActivity : AppCompatActivity() {
         val isCustom = app.id < 0
         val isEpic = app.id >= 2000000000
         val epicId = if (isEpic) app.id - 2000000000 else 0
+        var shortcutRefreshKey by remember(app.id, isCustom, isEpic, epicId) { mutableStateOf(0) }
+        var pinnedShortcutOverride by remember(app.id, isCustom, isEpic, epicId) { mutableStateOf<Boolean?>(null) }
         val epicArtworkUrl by produceState<String?>(initialValue = null, key1 = isEpic, key2 = epicId) {
             value = if (isEpic) {
                 val epicGame = db.epicGameDao().getById(epicId)
@@ -2183,6 +2226,25 @@ class UnifiedActivity : AppCompatActivity() {
                 null
             }
         }
+        val currentRefreshSignal = this@UnifiedActivity.libraryRefreshSignal
+        val homeShortcutState by produceState(
+            HomeShortcutUiState(),
+            app.id,
+            isCustom,
+            isEpic,
+            epicId,
+            currentRefreshSignal,
+            shortcutRefreshKey,
+        ) {
+            value = withContext(Dispatchers.IO) {
+                val shortcut = findLibraryShortcutForGame(ContainerManager(context), app, isCustom, isEpic, epicId)
+                HomeShortcutUiState(
+                    shortcut = shortcut,
+                    isPinned = shortcut?.let { LibraryShortcutUtils.hasPinnedHomeShortcut(context, it) } == true,
+                )
+            }
+        }
+        val hasPinnedShortcut = pinnedShortcutOverride ?: homeShortcutState.isPinned
         
         // Export logic
         val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
@@ -2347,33 +2409,41 @@ class UnifiedActivity : AppCompatActivity() {
                             },
                         ),
                         GameSettingsActionItem(
-                            title = stringResource(R.string.common_ui_shortcut),
+                            title = stringResource(
+                                if (hasPinnedShortcut) R.string.common_ui_remove
+                                else R.string.common_ui_shortcut
+                            ),
                             icon = Icons.Outlined.Home,
+                            accentColor = if (hasPinnedShortcut) DangerRed else Accent,
                             onClick = {
-                                scope.launch {
-                                    val created = withContext(Dispatchers.IO) {
-                                        addLibraryShortcutToHomeScreen(
-                                            context,
-                                            app,
-                                            isCustom,
-                                            isEpic,
-                                            epicId,
-                                            epicArtworkUrl,
-                                        )
+                                if (hasPinnedShortcut) {
+                                    currentTab = GameSettingsScreen.Shortcut
+                                } else {
+                                    scope.launch {
+                                        val created = withContext(Dispatchers.IO) {
+                                            addLibraryShortcutToHomeScreen(
+                                                context,
+                                                app,
+                                                isCustom,
+                                                isEpic,
+                                                epicId,
+                                                epicArtworkUrl,
+                                            )
+                                        }
+                                        if (created) {
+                                            pinnedShortcutOverride = true
+                                            shortcutRefreshKey++
+                                        }
+                                        if (!created) {
+                                            com.winlator.cmod.core.AppUtils.showToast(
+                                                context,
+                                                context.getString(
+                                                    R.string.library_games_failed_to_create_shortcut,
+                                                    app.name,
+                                                ),
+                                            )
+                                        }
                                     }
-                                    val message = if (created) {
-                                        context.getString(R.string.library_games_shortcut_created)
-                                    } else {
-                                        context.getString(
-                                            R.string.library_games_failed_to_create_shortcut,
-                                            app.name,
-                                        )
-                                    }
-                                    android.widget.Toast.makeText(
-                                        context,
-                                        message,
-                                        android.widget.Toast.LENGTH_SHORT,
-                                    ).show()
                                 }
                             },
                         ),
@@ -2396,6 +2466,30 @@ class UnifiedActivity : AppCompatActivity() {
                     )
 
                     GameSettingsActionGrid(actions = actions)
+                }
+
+                GameSettingsScreen.Shortcut -> {
+                    ShortcutRemovalConfirmation(
+                        message = stringResource(R.string.shortcuts_list_remove_game_shortcut_message, app.name),
+                        onConfirm = {
+                            scope.launch {
+                                val removed = withContext(Dispatchers.IO) {
+                                    homeShortcutState.shortcut?.let {
+                                        LibraryShortcutUtils.disablePinnedHomeShortcut(context, it)
+                                    } == true
+                                }
+                                pinnedShortcutOverride = if (removed) false else hasPinnedShortcut
+                                shortcutRefreshKey++
+                                currentTab = GameSettingsScreen.Menu
+                                com.winlator.cmod.core.AppUtils.showToast(
+                                    context,
+                                    if (removed) context.getString(R.string.shortcuts_list_removed)
+                                    else context.getString(R.string.common_ui_unknown_error),
+                                )
+                            }
+                        },
+                        onCancel = { currentTab = GameSettingsScreen.Menu },
+                    )
                 }
 
                 GameSettingsScreen.Saves -> {
@@ -2501,11 +2595,7 @@ class UnifiedActivity : AppCompatActivity() {
                                 scope.launch(Dispatchers.IO) {
                                     val cm = ContainerManager(context)
                                     val sc = findLibraryShortcutForGame(cm, app, isCustom, isEpic, epicId)
-                                    sc?.file?.let {
-                                        it.delete()
-                                        val lnkFile = java.io.File(it.path.substringBeforeLast(".") + ".lnk")
-                                        if (lnkFile.exists()) lnkFile.delete()
-                                    }
+                                    sc?.let { LibraryShortcutUtils.deleteShortcutArtifacts(context, it) }
                                     java.io.File(context.filesDir, "custom_icons/${app.name.replace("/", "_")}.png").delete()
                                     PluviaApp.events.emit(AndroidEvent.LibraryInstallStatusChanged(app.id))
                                     withContext(Dispatchers.Main) {
@@ -2542,6 +2632,26 @@ class UnifiedActivity : AppCompatActivity() {
         val context = LocalContext.current
         var currentTab by remember { mutableStateOf(GameSettingsScreen.Menu) }
         val scope = rememberCoroutineScope()
+        var shortcutRefreshKey by remember(app.id) { mutableStateOf(0) }
+        var pinnedShortcutOverride by remember(app.id) { mutableStateOf<Boolean?>(null) }
+        val currentRefreshSignal = this@UnifiedActivity.libraryRefreshSignal
+        val homeShortcutState by produceState(
+            HomeShortcutUiState(),
+            app.id,
+            currentRefreshSignal,
+            shortcutRefreshKey,
+        ) {
+            value = withContext(Dispatchers.IO) {
+                val shortcut = ContainerManager(context).loadShortcuts().find {
+                    it.getExtra("game_source") == "GOG" && it.getExtra("gog_id") == app.id
+                }
+                HomeShortcutUiState(
+                    shortcut = shortcut,
+                    isPinned = shortcut?.let { LibraryShortcutUtils.hasPinnedHomeShortcut(context, it) } == true,
+                )
+            }
+        }
+        val hasPinnedShortcut = pinnedShortcutOverride ?: homeShortcutState.isPinned
 
         GameSettingsDialogFrame(
             title = app.title,
@@ -2573,27 +2683,35 @@ class UnifiedActivity : AppCompatActivity() {
                                 },
                             ),
                             GameSettingsActionItem(
-                                title = stringResource(R.string.common_ui_shortcut),
+                                title = stringResource(
+                                    if (hasPinnedShortcut) R.string.common_ui_remove
+                                    else R.string.common_ui_shortcut
+                                ),
                                 icon = Icons.Outlined.Home,
+                                accentColor = if (hasPinnedShortcut) DangerRed else Accent,
                                 onClick = {
-                                    scope.launch {
-                                        val artworkUrl = app.imageUrl.ifEmpty { app.iconUrl }
-                                        val created = withContext(Dispatchers.IO) {
-                                            addGogShortcutToHomeScreen(context, app, artworkUrl)
+                                    if (hasPinnedShortcut) {
+                                        currentTab = GameSettingsScreen.Shortcut
+                                    } else {
+                                        scope.launch {
+                                            val artworkUrl = app.imageUrl.ifEmpty { app.iconUrl }
+                                            val created = withContext(Dispatchers.IO) {
+                                                addGogShortcutToHomeScreen(context, app, artworkUrl)
+                                            }
+                                            if (created) {
+                                                pinnedShortcutOverride = true
+                                                shortcutRefreshKey++
+                                            }
+                                            if (!created) {
+                                                com.winlator.cmod.core.AppUtils.showToast(
+                                                    context,
+                                                    context.getString(
+                                                        R.string.library_games_failed_to_create_shortcut,
+                                                        app.title,
+                                                    ),
+                                                )
+                                            }
                                         }
-                                        val message = if (created) {
-                                            context.getString(R.string.library_games_shortcut_created)
-                                        } else {
-                                            context.getString(
-                                                R.string.library_games_failed_to_create_shortcut,
-                                                app.title,
-                                            )
-                                        }
-                                        android.widget.Toast.makeText(
-                                            context,
-                                            message,
-                                            android.widget.Toast.LENGTH_SHORT,
-                                        ).show()
                                     }
                                 },
                             ),
@@ -2614,6 +2732,31 @@ class UnifiedActivity : AppCompatActivity() {
                                 onClick = { currentTab = GameSettingsScreen.Uninstall },
                             ),
                         ),
+                    )
+                }
+
+                GameSettingsScreen.Shortcut -> {
+                    ShortcutRemovalConfirmation(
+                        message = stringResource(R.string.shortcuts_list_remove_game_shortcut_message, app.title),
+                        onConfirm = {
+                            scope.launch {
+                                val removed = withContext(Dispatchers.IO) {
+                                    homeShortcutState.shortcut?.let {
+                                        LibraryShortcutUtils.disablePinnedHomeShortcut(context, it)
+                                    } == true
+                                }
+                                pinnedShortcutOverride = if (removed) false else hasPinnedShortcut
+                                shortcutRefreshKey++
+                                currentTab = GameSettingsScreen.Menu
+                                android.widget.Toast.makeText(
+                                    context,
+                                    if (removed) context.getString(R.string.shortcuts_list_removed)
+                                    else context.getString(R.string.common_ui_unknown_error),
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        },
+                        onCancel = { currentTab = GameSettingsScreen.Menu },
                     )
                 }
 
@@ -2736,7 +2879,7 @@ class UnifiedActivity : AppCompatActivity() {
 
     // Library Game Detail Dialog
 
-    private enum class LibraryDetailScreen { Main, Saves, CloudSaves, Uninstall }
+    private enum class LibraryDetailScreen { Main, Shortcut, Saves, CloudSaves, Uninstall }
 
     @Composable
     private fun LibraryGameDetailDialog(
@@ -2747,6 +2890,8 @@ class UnifiedActivity : AppCompatActivity() {
         val context = LocalContext.current
         val scope = rememberCoroutineScope()
         var currentScreen by remember { mutableStateOf(LibraryDetailScreen.Main) }
+        var shortcutRefreshKey by remember(app.id, gogGame?.id) { mutableStateOf(0) }
+        var pinnedShortcutOverride by remember(app.id, gogGame?.id) { mutableStateOf<Boolean?>(null) }
 
         val isCustom = app.id < 0
         val isEpic = app.id >= 2000000000
@@ -2763,6 +2908,32 @@ class UnifiedActivity : AppCompatActivity() {
                 eg?.primaryImageUrl ?: eg?.iconUrl
             } else null
         }
+        val currentRefreshSignal = this@UnifiedActivity.libraryRefreshSignal
+        val homeShortcutState by produceState(
+            HomeShortcutUiState(),
+            app.id,
+            gogGame?.id,
+            isCustom,
+            isEpic,
+            isGog,
+            epicId,
+            currentRefreshSignal,
+            shortcutRefreshKey,
+        ) {
+            value = withContext(Dispatchers.IO) {
+                val shortcut = when {
+                    isGog -> ContainerManager(context).loadShortcuts().find {
+                        it.getExtra("game_source") == "GOG" && it.getExtra("gog_id") == gogGame!!.id
+                    }
+                    else -> findLibraryShortcutForGame(ContainerManager(context), app, isCustom, isEpic, epicId)
+                }
+                HomeShortcutUiState(
+                    shortcut = shortcut,
+                    isPinned = shortcut?.let { LibraryShortcutUtils.hasPinnedHomeShortcut(context, it) } == true,
+                )
+            }
+        }
+        val hasPinnedShortcut = pinnedShortcutOverride ?: homeShortcutState.isPinned
 
         // Hero image
         val heroImageUrl: Any? = when {
@@ -3113,21 +3284,37 @@ class UnifiedActivity : AppCompatActivity() {
 
                                             CompactActionButton(
                                                 icon = Icons.Outlined.Home,
-                                                label = stringResource(R.string.common_ui_shortcut),
+                                                label = stringResource(
+                                                    if (hasPinnedShortcut) R.string.common_ui_remove
+                                                    else R.string.common_ui_shortcut
+                                                ),
+                                                tint = if (hasPinnedShortcut) DangerRed else TextPrimary,
+                                                bgColor = if (hasPinnedShortcut) DangerRed.copy(alpha = 0.12f) else SurfaceDark,
                                                 modifier = Modifier.weight(1f),
                                                 onClick = {
-                                                    scope.launch {
-                                                        val created = withContext(Dispatchers.IO) {
-                                                            if (isGog) {
-                                                                val artworkUrl = gogGame!!.imageUrl.ifEmpty { gogGame.iconUrl }
-                                                                addGogShortcutToHomeScreen(context, gogGame, artworkUrl)
-                                                            } else {
-                                                                addLibraryShortcutToHomeScreen(context, app, isCustom, isEpic, epicId, epicArtworkUrl)
+                                                    if (hasPinnedShortcut) {
+                                                        currentScreen = LibraryDetailScreen.Shortcut
+                                                    } else {
+                                                        scope.launch {
+                                                            val created = withContext(Dispatchers.IO) {
+                                                                if (isGog) {
+                                                                    val artworkUrl = gogGame!!.imageUrl.ifEmpty { gogGame.iconUrl }
+                                                                    addGogShortcutToHomeScreen(context, gogGame, artworkUrl)
+                                                                } else {
+                                                                    addLibraryShortcutToHomeScreen(context, app, isCustom, isEpic, epicId, epicArtworkUrl)
+                                                                }
+                                                            }
+                                                            if (created) {
+                                                                pinnedShortcutOverride = true
+                                                                shortcutRefreshKey++
+                                                            }
+                                                            if (!created) {
+                                                                com.winlator.cmod.core.AppUtils.showToast(
+                                                                    context,
+                                                                    context.getString(R.string.library_games_failed_to_create_shortcut, app.name),
+                                                                )
                                                             }
                                                         }
-                                                        val message = if (created) context.getString(R.string.library_games_shortcut_created)
-                                                        else context.getString(R.string.library_games_failed_to_create_shortcut, app.name)
-                                                        android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
                                                     }
                                                 },
                                             )
@@ -3166,6 +3353,50 @@ class UnifiedActivity : AppCompatActivity() {
                                             )
                                         }
                                     }
+                                }
+                            }
+
+                            LibraryDetailScreen.Shortcut -> {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 24.dp, vertical = 20.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    Text(
+                                        stringResource(R.string.common_ui_shortcut),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = TextSecondary,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 1.1.sp,
+                                    )
+
+                                    Spacer(Modifier.weight(1f))
+
+                                    ShortcutRemovalConfirmation(
+                                        message = stringResource(
+                                            R.string.shortcuts_list_remove_game_shortcut_message,
+                                            if (isGog) gogGame!!.title else app.name,
+                                        ),
+                                        onConfirm = {
+                                            scope.launch {
+                                                val removed = withContext(Dispatchers.IO) {
+                                                    homeShortcutState.shortcut?.let {
+                                                        LibraryShortcutUtils.disablePinnedHomeShortcut(context, it)
+                                                    } == true
+                                                }
+                                                pinnedShortcutOverride = if (removed) false else hasPinnedShortcut
+                                                shortcutRefreshKey++
+                                                currentScreen = LibraryDetailScreen.Main
+                                                com.winlator.cmod.core.AppUtils.showToast(
+                                                    context,
+                                                    if (removed) context.getString(R.string.shortcuts_list_removed)
+                                                    else context.getString(R.string.common_ui_unknown_error),
+                                                )
+                                            }
+                                        },
+                                        onCancel = { currentScreen = LibraryDetailScreen.Main },
+                                    )
                                 }
                             }
 
@@ -3360,11 +3591,7 @@ class UnifiedActivity : AppCompatActivity() {
                                                 scope.launch(Dispatchers.IO) {
                                                     val cm = ContainerManager(context)
                                                     val sc = findLibraryShortcutForGame(cm, app, isCustom, isEpic, epicId)
-                                                    sc?.file?.let {
-                                        it.delete()
-                                        val lnkFile = java.io.File(it.path.substringBeforeLast(".") + ".lnk")
-                                        if (lnkFile.exists()) lnkFile.delete()
-                                    }
+                                                    sc?.let { LibraryShortcutUtils.deleteShortcutArtifacts(context, it) }
                                                     java.io.File(context.filesDir, "custom_icons/${app.name.replace("/", "_")}.png").delete()
                                                     PluviaApp.events.emit(AndroidEvent.LibraryInstallStatusChanged(app.id))
                                                     withContext(Dispatchers.Main) {
@@ -5779,13 +6006,13 @@ class UnifiedActivity : AppCompatActivity() {
         if (shortcutId.isEmpty()) return false
         val canonicalShortcutPath = shortcut.file.absolutePath
         val shortcutPathHash = canonicalShortcutPath.hashCode()
+        val containerIdForLaunch = shortcut.getExtra("container_id").toIntOrNull() ?: shortcut.container.id
         val pinShortcutId = "shortcut_${shortcut.container.id}_${shortcutId}_${shortcutPathHash.toUInt().toString(16)}"
 
         val shortcutManager = context.getSystemService(android.content.pm.ShortcutManager::class.java) ?: return false
         if (!shortcutManager.isRequestPinShortcutSupported) return false
 
         val launchIntent = Intent(context, XServerDisplayActivity::class.java).apply {
-            val containerIdForLaunch = shortcut.getExtra("container_id").toIntOrNull() ?: shortcut.container.id
             val launchData = Uri.Builder()
                 .scheme("winnative")
                 .authority(BuildConfig.APPLICATION_ID)
@@ -5823,7 +6050,34 @@ class UnifiedActivity : AppCompatActivity() {
             .setIntent(launchIntent)
             .build()
 
-        return shortcutManager.requestPinShortcut(pinShortcutInfo, null)
+        val callbackIntent = Intent(context, ShortcutBroadcastReceiver::class.java).apply {
+            action = ShortcutBroadcastReceiver.ACTION_PIN_SHORTCUT_RESULT
+            putExtra("shortcut_path", canonicalShortcutPath)
+            putExtra("shortcut_name", shortcut.name)
+        }
+        val callbackFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val callback = PendingIntent.getBroadcast(
+            context,
+            pinShortcutId.hashCode(),
+            callbackIntent,
+            callbackFlags,
+        )
+
+        val result = ShortcutsFragment.pinOrUpdateShortcut(
+            shortcutManager,
+            pinShortcutInfo,
+            ShortcutsFragment.buildPinnedShortcutIds(containerIdForLaunch, shortcutId, canonicalShortcutPath),
+            callback.intentSender
+        )
+        if (result == ShortcutsFragment.PinShortcutResult.REUSED_EXISTING) {
+            val toastIcon = artworkBitmap ?: shortcut.icon
+            com.winlator.cmod.core.AppUtils.showToast(
+                context,
+                R.string.shortcuts_list_readded_existing,
+                toastIcon
+            )
+        }
+        return result != ShortcutsFragment.PinShortcutResult.FAILED
     }
 
     private suspend fun addLibraryShortcutToHomeScreen(

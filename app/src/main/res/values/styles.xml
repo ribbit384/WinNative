@@ -257,15 +257,6 @@
         <item name="android:background">@drawable/button_neutral</item>
     </style>
 
-    <style name="ButtonPositive" parent="BaseButton">
-        <item name="android:background">@drawable/button_positive</item>
-        <item name="android:textColor">#ffffff</item>
-    </style>
-
-    <style name="ButtonPositive.Dark" parent="BaseButton.Dark">
-        <item name="android:background">@drawable/button_positive</item>
-    </style>
-
     <style name="ContentDialogButtonBase" parent="BaseButton">
         <item name="android:layout_height">36dp</item>
         <item name="android:minWidth">80dp</item>
@@ -373,10 +364,6 @@
         <item name="android:layout_marginTop">10dp</item>
     </style>
 
-    <style name="FieldSet.Dark" parent="FieldSet">
-        <item name="android:background">@drawable/bordered_panel_dark</item>
-    </style>
-
     <style name="FieldSetLabel">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
@@ -406,27 +393,6 @@
 
     <style name="TableHeadBackground.Dark" parent="TableHeadBackground">
         <item name="android:background">@drawable/table_head_background</item>
-    </style>
-
-    <!-- Help Button Styles -->
-    <style name="HelpButton">
-        <item name="android:layout_width">22dp</item>
-        <item name="android:layout_height">22dp</item>
-        <item name="android:layout_marginLeft">4dp</item>
-        <item name="android:src">@drawable/ic_content_menu_info</item>
-        <item name="android:tint">@color/settings_icon_tint</item>
-    </style>
-
-    <style name="HelpButton.Dark" parent="HelpButton">
-        <item name="android:tint">@color/settings_icon_tint</item>
-    </style>
-
-    <style name="TabLayoutBackground" >
-        <item name="android:background">@drawable/tab_layout_background</item>
-    </style>
-
-    <style name="TabLayoutBackground.Dark" >
-        <item name="android:background">@drawable/tab_layout_background_dark</item>
     </style>
 
     <style name="SpinnerDialogDark" parent="Theme.AppCompat.Light.Dialog">
@@ -565,34 +531,6 @@
         <item name="windowNoTitle">false</item>
     </style>
 
-    <style name="Toolbox">
-        <item name="android:gravity">center_vertical</item>
-        <item name="android:orientation">horizontal</item>
-        <item name="android:background">@drawable/toolbox</item>
-        <item name="android:paddingLeft">8.0dip</item>
-        <item name="android:paddingTop">2.0dip</item>
-        <item name="android:paddingRight">8.0dip</item>
-        <item name="android:paddingBottom">2.0dip</item>
-        <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">40.0dip</item>
-    </style>
-
-    <style name="LeftSideButton">
-        <item name="android:background">@drawable/left_side_button</item>
-        <item name="android:padding">6.0dip</item>
-        <item name="android:layout_width">40.0dip</item>
-        <item name="android:layout_height">36.0dip</item>
-        <item name="tint">@color/colorPrimary</item>
-    </style>
-
-    <style name="RightSideButton">
-        <item name="android:background">@drawable/right_side_button</item>
-        <item name="android:padding">6.0dip</item>
-        <item name="android:layout_width">40.0dip</item>
-        <item name="android:layout_height">36.0dip</item>
-        <item name="tint">@color/colorPrimary</item>
-    </style>
-
     <!-- Navigation menu item text style -->
     <style name="NavMenuTextAppearance" parent="TextAppearance.AppCompat.Body1">
         <item name="android:fontFamily">@font/inter</item>
@@ -619,17 +557,6 @@
         <item name="android:textStyle">bold</item>
     </style>
 
-    <style name="OtherSettingsCard">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginBottom">10dp</item>
-        <item name="android:background">@drawable/content_list_card_surface</item>
-        <item name="android:paddingLeft">14dp</item>
-        <item name="android:paddingTop">12dp</item>
-        <item name="android:paddingRight">14dp</item>
-        <item name="android:paddingBottom">12dp</item>
-    </style>
-
     <style name="OtherSettingsCardTitle">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
@@ -637,14 +564,6 @@
         <item name="android:textColor">@color/settings_text_primary</item>
         <item name="android:textSize">15sp</item>
         <item name="android:textStyle">bold</item>
-    </style>
-
-    <style name="ExpandableSectionCard">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginBottom">8dp</item>
-        <item name="android:background">@drawable/content_list_card_surface</item>
-        <item name="android:orientation">vertical</item>
     </style>
 
     <style name="ExpandableSectionHeader">

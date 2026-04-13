@@ -9,6 +9,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Intent;
+import android.content.pm.ShortcutManager;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
@@ -625,6 +626,15 @@ public class XServerDisplayActivity extends AppCompatActivity {
             boolean hasUsablePath = shortcutPathFile != null && shortcutPathFile.isFile();
             if (!hasUsablePath) {
                 Log.w("XServerDisplayActivity", "Shortcut path from intent is not usable and no shortcut identity match was found");
+                boolean launchedFromShortcutIdentity = (shortcutUuid != null && !shortcutUuid.isEmpty())
+                        || shortcutPathHash != 0
+                        || (shortcutPath != null && !shortcutPath.isEmpty());
+                if (launchedFromShortcutIdentity) {
+                    disableUnavailablePinnedShortcut(containerId, shortcutUuid, shortcutPath, shortcutPathHash);
+                    showToast(this, R.string.shortcuts_list_not_available);
+                    finish();
+                    return;
+                }
             }
         }
 
@@ -1237,6 +1247,40 @@ public class XServerDisplayActivity extends AppCompatActivity {
             Log.e("XServerDisplayActivity", "Failed to resolve shortcut by absolute path", e);
         }
         return null;
+    }
+
+    private void disableUnavailablePinnedShortcut(int containerId, @Nullable String shortcutUuid, @Nullable String shortcutPath, int shortcutPathHash) {
+        ShortcutManager shortcutManager = getSystemService(ShortcutManager.class);
+        if (shortcutManager == null) return;
+
+        ArrayList<String> shortcutIds = ShortcutsFragment.buildPinnedShortcutIds(containerId, shortcutUuid, shortcutPath);
+        if ((shortcutPath == null || shortcutPath.isEmpty()) && shortcutUuid != null && !shortcutUuid.isEmpty()
+                && containerId > 0 && shortcutPathHash != 0) {
+            shortcutIds.add(
+                    "shortcut_" + containerId + "_" + shortcutUuid + "_" + Integer.toUnsignedString(shortcutPathHash, 16)
+            );
+        }
+        if (shortcutIds.isEmpty()) return;
+
+        try {
+            shortcutManager.disableShortcuts(shortcutIds, getString(R.string.shortcuts_list_not_available));
+        } catch (Exception e) {
+            Log.w("XServerDisplayActivity", "Failed to disable unavailable pinned shortcut", e);
+        }
+
+        try {
+            shortcutManager.removeDynamicShortcuts(shortcutIds);
+        } catch (Exception e) {
+            Log.w("XServerDisplayActivity", "Failed to remove dynamic shortcut metadata", e);
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                shortcutManager.removeLongLivedShortcuts(shortcutIds);
+            } catch (Exception e) {
+                Log.w("XServerDisplayActivity", "Failed to remove long-lived shortcut metadata", e);
+            }
+        }
     }
 
     private String resolveCustomMountPath(@NonNull Shortcut shortcut) {
