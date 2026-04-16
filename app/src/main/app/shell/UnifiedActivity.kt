@@ -108,6 +108,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -219,6 +220,22 @@ private val DangerRed = Color(0xFFFF6B6B)
 private val StatusOnline = Color(0xFF3FB950)
 private val StatusAway = Color(0xFFF0C040)
 private val StatusOffline = Color(0xFF6E7681)
+private val TabScreenHorizontalPadding = 16.dp
+private val TabScreenBottomPadding = 8.dp
+private val UnifiedTopBarHorizontalPadding = 8.dp
+private val UnifiedTopBarTopPadding = 4.dp
+private val UnifiedTopBarHeight = 56.dp
+private val TabListContentPadding = PaddingValues(top = 4.dp, bottom = 12.dp)
+private val TabGridContentPadding = PaddingValues(top = 8.dp, bottom = 16.dp)
+private val TabGridTopPadding = 8.dp
+private val TabCarouselTopPadding = 12.dp
+private val TabCarouselBottomPadding = 20.dp
+private val DownloadsHeaderTopPadding = 2.dp
+
+private fun Modifier.tabScreenPadding(
+    top: Dp = 0.dp,
+    bottom: Dp = TabScreenBottomPadding,
+): Modifier = padding(start = TabScreenHorizontalPadding, top = top, end = TabScreenHorizontalPadding, bottom = bottom)
 
 private val LIBRARY_NAME_SANITIZE_REGEX = "[^A-Za-z0-9 _-]".toRegex()
 
@@ -1333,17 +1350,29 @@ class UnifiedActivity :
                             }
                         }
 
+                        val configuration = LocalConfiguration.current
+                        val libraryFabBase = minOf(configuration.screenWidthDp, configuration.screenHeightDp)
+                        val addGameFabSize = (libraryFabBase * 0.125f).dp.coerceIn(56.dp, 64.dp)
+                        val addGameFabMargin = (libraryFabBase * 0.035f).dp.coerceIn(12.dp, 20.dp)
+                        val addGameFabIconSize = (libraryFabBase * 0.055f).dp.coerceIn(24.dp, 28.dp)
+
                         // Bottom-right Add Custom Game button
                         if (key == "library") {
                             Box(
                                 modifier =
                                     Modifier
                                         .align(Alignment.BottomEnd)
-                                        .padding(16.dp)
-                                        .size(52.dp)
+                                        .windowInsetsPadding(
+                                            WindowInsets.navigationBars.only(
+                                                WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+                                            ),
+                                        )
+                                        .padding(end = addGameFabMargin, bottom = addGameFabMargin)
+                                        .size(addGameFabSize)
                                         .shadow(10.dp, CircleShape, spotColor = Accent.copy(alpha = 0.4f))
                                         .clip(CircleShape)
-                                        .background(Accent)
+                                        .background(SurfaceDark.copy(alpha = 0.96f), CircleShape)
+                                        .border(1.5.dp, Accent.copy(alpha = 0.55f), CircleShape)
                                         .focusProperties { canFocus = false } // No specific button for this, handle via long press or touch
                                         .clickable { showAddCustomGame = true },
                                 contentAlignment = Alignment.Center,
@@ -1352,7 +1381,7 @@ class UnifiedActivity :
                                     Icons.Outlined.Add,
                                     contentDescription = "Add Custom Game",
                                     tint = Color.White,
-                                    modifier = Modifier.size(28.dp),
+                                    modifier = Modifier.size(addGameFabIconSize),
                                 )
                             }
                         }
@@ -1499,8 +1528,12 @@ class UnifiedActivity :
                     Modifier
                         .fillMaxWidth()
                         .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal))
-                        .padding(start = 8.dp, end = 8.dp, top = 8.dp)
-                        .height(64.dp),
+                        .padding(
+                            start = UnifiedTopBarHorizontalPadding,
+                            end = UnifiedTopBarHorizontalPadding,
+                            top = UnifiedTopBarTopPadding,
+                        )
+                        .height(UnifiedTopBarHeight),
             ) {
                 // Center Block: Tabs (absolutely centered, unaffected by left/right content)
                 Row(
@@ -2104,9 +2137,9 @@ class UnifiedActivity :
             LibraryLayoutMode.GRID_4 -> {
                 FourByTwoGridView(
                     items = displayedApps,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                    modifier = Modifier.tabScreenPadding(),
                     gridState = gridState,
-                    contentPadding = PaddingValues(vertical = 16.dp),
+                    contentPadding = TabGridContentPadding,
                     clipContent = false,
                 ) { app, index, rowHeight ->
                     GameCapsule(
@@ -2140,7 +2173,7 @@ class UnifiedActivity :
             LibraryLayoutMode.CAROUSEL -> {
                 CarouselView(
                     items = displayedApps,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 20.dp),
+                    modifier = Modifier.tabScreenPadding(top = TabCarouselTopPadding, bottom = TabCarouselBottomPadding),
                     listState = carouselState,
                     selectedIndex = focusIndex,
                     onCenteredIndexChanged = { centeredIndex ->
@@ -2189,9 +2222,9 @@ class UnifiedActivity :
                 val listViewState = rememberLazyListState()
                 ListView(
                     items = displayedApps,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                    modifier = Modifier.tabScreenPadding(),
                     listState = listViewState,
-                    contentPadding = PaddingValues(vertical = 12.dp),
+                    contentPadding = TabListContentPadding,
                     selectedIndex = focusIndex,
                     onSelectedIndexChanged = { newIdx ->
                         activity?.libraryFocusIndex?.value = newIdx
@@ -4919,9 +4952,9 @@ class UnifiedActivity :
             JoystickListScroll(listViewState, activity?.rightStickScrollState)
             ListView(
                 items = displayedApps,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                modifier = Modifier.tabScreenPadding(),
                 listState = listViewState,
-                contentPadding = PaddingValues(vertical = 12.dp),
+                contentPadding = TabListContentPadding,
             ) { app, _, _ ->
                 EpicStoreCapsule(app, listMode = true, isControllerActive = ControllerHelper.isControllerConnected()) {
                     selectedAppId.value =
@@ -4946,7 +4979,7 @@ class UnifiedActivity :
             JoystickGridScroll(gridState, activity?.rightStickScrollState)
             FourByTwoGridView(
                 items = displayedApps,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+                modifier = Modifier.tabScreenPadding(top = TabGridTopPadding),
                 gridState = gridState,
             ) { app, index, rowHeight ->
                 Box(
@@ -5586,9 +5619,9 @@ class UnifiedActivity :
             val listViewState = rememberLazyListState()
             ListView(
                 items = displayedApps,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                modifier = Modifier.tabScreenPadding(),
                 listState = listViewState,
-                contentPadding = PaddingValues(vertical = 12.dp),
+                contentPadding = TabListContentPadding,
             ) { app, _, _ ->
                 val isInstalled = app.isInstalled && java.io.File(app.installPath).exists()
                 Row(
@@ -5658,7 +5691,7 @@ class UnifiedActivity :
             }
             FourByTwoGridView(
                 items = displayedApps,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+                modifier = Modifier.tabScreenPadding(top = TabGridTopPadding),
                 gridState = gridState,
             ) { app, index, rowHeight ->
                 val isInstalled = app.isInstalled && java.io.File(app.installPath).exists()
@@ -5935,9 +5968,9 @@ class UnifiedActivity :
             JoystickListScroll(listViewState, activity?.rightStickScrollState, minSpeed = 2.5f, maxSpeed = 16f, quadratic = true)
             ListView(
                 items = displayedApps,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                modifier = Modifier.tabScreenPadding(),
                 listState = listViewState,
-                contentPadding = PaddingValues(vertical = 12.dp),
+                contentPadding = TabListContentPadding,
             ) { app, _, _ ->
                 SteamStoreCapsule(app, listMode = true, isControllerActive = ControllerHelper.isControllerConnected(), onClick = {
                     selectedAppForDialog =
@@ -5965,7 +5998,7 @@ class UnifiedActivity :
             JoystickGridScroll(gridState, activity?.leftStickScrollState, deadZone = 0.15f, minSpeed = 0.3125f, maxSpeed = 2f)
             FourByTwoGridView(
                 items = displayedApps,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+                modifier = Modifier.tabScreenPadding(top = TabGridTopPadding),
                 gridState = gridState,
             ) { app, index, rowHeight ->
                 Box(
@@ -6204,7 +6237,7 @@ class UnifiedActivity :
             Modifier
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom))
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .tabScreenPadding(top = DownloadsHeaderTopPadding),
         ) {
             val isController = ControllerHelper.isControllerConnected()
             val isPS = ControllerHelper.isPlayStationController()
