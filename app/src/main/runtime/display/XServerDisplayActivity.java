@@ -182,6 +182,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     private static final String STEAM_USER_REGISTRY_BACKUP_FILE = "steam_registry_backup.reg";
     private static final String STEAM_SYSTEM_REGISTRY_BACKUP_FILE = "steam_system_registry_backup.reg";
     private static final String STEAM_CLIENT_STORE_RELATIVE_PATH = ".shared/steam-client-store";
+    private static final String COLDCLIENT_STORE_RELATIVE_PATH = ".shared/coldclient-store";
     private static final String PREVIOUS_STEAM_CLIENT_STORE_RELATIVE_PATH = ".steam-client-store";
     private static final String PREVIOUS_CONTAINER_STEAM_CLIENT_STORE_RELATIVE_PATH = ".wine/.steam-client-store";
     private static final String LEGACY_STEAM_CLIENT_STORE_RELATIVE_PATH = ".wine/drive_c/WinNative/SteamClient";
@@ -2267,6 +2268,14 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 : container != null && container.isLaunchRealSteam();
     }
 
+    private boolean isColdClientEnabledForShortcut() {
+        if (!isSteamShortcut()) return false;
+        if (isRealSteamLaunchEnabledForShortcut()) return false; // mutually exclusive
+        return shortcut != null
+                ? parseBoolean(getShortcutSetting("useColdClient", container.isUseColdClient() ? "1" : "0"))
+                : container != null && container.isUseColdClient();
+    }
+
     @Override
     protected void onStop() {
         super.onStop();
@@ -2643,10 +2652,15 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         boolean isSteamGame = isSteamShortcut();
         boolean isCustomGame = isCustomShortcut();
         boolean launchRealSteamSetup = isRealSteamLaunchEnabledForShortcut();
+        boolean coldClientSetup = isColdClientEnabledForShortcut();
 
-        // Restore Steam dir before Steam game setup; hide it for Custom Games
+        // Point the container's Steam symlink at the correct sidecar:
+        //   - Launch Steam Client → .shared/steam-client-store/ (pristine real Steam)
+        //   - Cold Client         → .shared/coldclient-store/   (Goldberg stubs + loader)
+        //   - Custom Games        → no Steam dir exposed
+        // The two stores are completely separate — ColdClient never contaminates Real Steam.
         if (isSteamGame || launchRealSteamSetup) {
-            setSteamClientVisibility(true);
+            setSteamClientVisibility(true, coldClientSetup);
         } else if (isCustomGame) {
             setSteamClientVisibility(false);
         }
@@ -2716,49 +2730,33 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                         
                         if (launchRealSteamSetup) {
                             // ── Real Steam Mode ──────────────────────────────────────────────────
-                            // Completely bypass emulators. We just need to make sure the original
-                            // Steam client files and original game files are pristine.
+                            // The shared Steam store (.shared/steam-client-store/) is permanently
+                            // pristine because ColdClient writes to its own sidecar. No need to
+                            // undo DLL swaps in the Steam dir — just undo the GAME-side swaps
+                            // (steam_api DLL and the exe) that Goldberg/Steamless applied.
                             MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_DLL_REPLACED);
                             MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_COLDCLIENT_USED);
                             MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_DRM_PATCHED);
 
-                            // Purge known ColdClientLoader emulator footprints which could trigger Steam's anti-tamper
-                            File steamDirFile = new File(container.getRootDir(), ".wine/drive_c/Program Files (x86)/Steam");
-                            String[] emulatorFootprints = {
-                                "steamclient_loader_x64.exe", "steamclient_loader_x64.dll",
-                                "steamclient_loader_x86.dll", "steamclient_loader.exe", "steamclient_loader.dll",
-                                "ColdClientLoader.ini", "steam_interfaces.txt",
-                                "extra_dlls/steamclient_extra_x32.dll", "extra_dlls/steamclient_extra_x64.dll"
-                            };
-                            for (String remnant : emulatorFootprints) {
-                                File remnantFile = new File(steamDirFile, remnant);
-                                if (remnantFile.exists()) {
-                                    remnantFile.delete();
-                                    Log.d("XServerDisplayActivity", "Real Steam Setup: Purged emulator leftover " + remnant);
-                                }
-                            }
-                            File extraDllsDir = new File(steamDirFile, "extra_dlls");
-                            if (extraDllsDir.isDirectory() && FileUtils.isEmpty(extraDllsDir)) {
-                                extraDllsDir.delete();
-                            }
-
-                            // Purge any A:\steam.exe previously copied by MoveSteamExe hack
-                            // If a game invokes an isolated steam.exe on A:\, it immediately crashes Steam's integrity checks.
+                            // Clean up a side-effect of an old "MoveSteamExe" hack: if a game
+                            // dir still has a local steam.exe copy, real Steam's integrity
+                            // check crashes.
                             File copiedSteamExe = new File(gameInstallPath, "steam.exe");
                             if (copiedSteamExe.exists()) {
                                 copiedSteamExe.delete();
-                                Log.d("XServerDisplayActivity", "Real Steam Setup: Purged orphaned local steam.exe from " + copiedSteamExe.getAbsolutePath());
+                                Log.d("XServerDisplayActivity",
+                                        "Real Steam Setup: Purged orphaned local steam.exe from "
+                                                + copiedSteamExe.getAbsolutePath());
                             }
                             cleanupEmbeddedSteamRuntime(gameDir);
 
-                            // Restore original steamclient.dll (if ColdClient replaced it previously)
-                            SteamUtils.restoreSteamclientFiles(this, appId);
-                            // Restore original steam_api.dll (if Goldberg replaced it previously)
+                            // Undo Goldberg's steam_api replacement in the game dir and restore
+                            // the original .exe if Steamless had swapped in an unpacked copy.
                             restoreSteamApiDlls(gameDir);
-                            // Restore original .exe (if Steamless replaced it previously)
                             SteamUtils.restoreOriginalExecutable(this, appId);
 
-                            Log.d("XServerDisplayActivity", "Real Steam Setup: Pristine environment restored for appId=" + appId);
+                            Log.d("XServerDisplayActivity",
+                                    "Real Steam Setup: Game-side state restored for appId=" + appId);
                         } else if (useColdClient) {
                             // ── ColdClient launcher mode ──────
                             // ColdClientLoader handles Steam emulation by loading Goldberg's
@@ -2770,57 +2768,30 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                             MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_DLL_REPLACED);
                             MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_DLL_RESTORED);
 
-                            // One-time-per-prefix provisioning guard: once the loader + Goldberg
-                            // stubs are extracted into the prefix and the DLL-scan marker is set,
-                            // the tzst extract / DLL backup / interfaces scan don't need to rerun.
-                            // Per-launch config (steam_settings, ini, symlinks) always runs below.
-                            File coldClientLoaderExe = new File(container.getRootDir(),
-                                    ".wine/drive_c/Program Files (x86)/Steam/steamclient_loader_x64.exe");
+                            // Populate the ColdClient sidecar store on first use. This is fully
+                            // decoupled from the pristine Real Steam store — ColdClient's Goldberg
+                            // stubs + loader live in .shared/coldclient-store/, not in the real
+                            // Steam dir, so switching back to Launch Steam Client later doesn't
+                            // need to restore anything.
+                            //
+                            // The container's Steam symlink was already pointed at the coldclient
+                            // store by setSteamClientVisibility(true, coldClientMode=true) above,
+                            // so any writes through drive_c/Program Files (x86)/Steam land in the
+                            // sidecar automatically.
+                            boolean sidecarReady = ensureColdClientStore();
+                            if (!sidecarReady) {
+                                Log.w("XServerDisplayActivity", "ColdClient sidecar store not ready — loader/Goldberg stubs missing");
+                            }
+
+                            // Restore game-side state (steam_api DLLs + exe) once per-prefix
                             boolean coldClientProvisioned =
-                                    MarkerUtils.INSTANCE.hasMarker(gameInstallPath, Marker.STEAM_COLDCLIENT_USED)
-                                    && coldClientLoaderExe.exists();
-
+                                    MarkerUtils.INSTANCE.hasMarker(gameInstallPath, Marker.STEAM_COLDCLIENT_USED);
                             if (!coldClientProvisioned) {
-                                // Restore original steam_api DLLs if previously replaced by Goldberg mode
                                 SteamUtils.putBackSteamDlls(gameInstallPath);
-
-                                // Backup steamclient DLLs before any modification (for restore on mode switch)
-                                SteamUtils.backupSteamclientFiles(this, appId);
-
-                                // Delete extra_dlls folder before extraction to prevent conflicts
-                                File extraDllDir = new File(container.getRootDir(), ".wine/drive_c/Program Files (x86)/Steam/extra_dlls");
-                                if (extraDllDir.exists()) {
-                                    com.winlator.cmod.shared.io.FileUtils.delete(extraDllDir);
-                                    Log.d("XServerDisplayActivity", "Deleted extra_dlls directory before extraction");
-                                }
-
-                                // Extract ColdClientLoader + Goldberg steamclient stubs into the Wine prefix.
-                                // The archive extracts into imageFs.rootDir at home/xuser/.wine/... which resolves
-                                // through the container activation symlink to the correct container prefix.
-                                // Do NOT break the Steam symlink — mode switches use backup/restore instead.
-                                try {
-                                    File expFile = new File(getFilesDir(), "experimental-drm.tzst");
-                                    if (expFile.exists()) {
-                                        com.winlator.cmod.shared.io.TarCompressorUtils.extract(
-                                                com.winlator.cmod.shared.io.TarCompressorUtils.Type.ZSTD,
-                                                expFile, imageFs.getRootDir(), null);
-                                        Log.d("XServerDisplayActivity", "Extracted experimental-drm.tzst for ColdClient mode");
-                                    } else {
-                                        Log.w("XServerDisplayActivity", "experimental-drm.tzst not found! ColdClient mode may fail.");
-                                    }
-                                } catch (Exception e) {
-                                    Log.e("XServerDisplayActivity", "Failed to extract experimental-drm.tzst", e);
-                                }
-
-                                // Restore original steam_api DLLs in game dir (ColdClient hooks through steamclient, not steam_api)
-                                SteamUtils.putBackSteamDlls(gameInstallPath);
-                                // Restore unpacked exe if available
                                 SteamUtils.restoreUnpackedExecutable(this, appId);
-
-                                // Generate steam_interfaces.txt from the original DLLs (slow scan, once per prefix)
                                 generateSteamInterfacesForGame(gameDir);
                             } else {
-                                Log.d("XServerDisplayActivity", "ColdClient prefix already provisioned for appId=" + appId + ", skipping extract/backup");
+                                Log.d("XServerDisplayActivity", "ColdClient prefix already provisioned for appId=" + appId);
                             }
 
                             // Per-launch config: picks up any toggles the user changed between launches
@@ -5975,37 +5946,49 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     }
     
     private void setSteamClientVisibility(boolean visible) {
+        setSteamClientVisibility(visible, false);
+    }
+
+    private void setSteamClientVisibility(boolean visible, boolean coldClientMode) {
         if (container == null) return;
-        updateSteamDirectoryVisibility(visible);
+        updateSteamDirectoryVisibility(visible, coldClientMode);
         updateSteamRegistryVisibility(visible);
     }
 
     private void updateSteamDirectoryVisibility(boolean visible) {
+        updateSteamDirectoryVisibility(visible, false);
+    }
+
+    private void updateSteamDirectoryVisibility(boolean visible, boolean coldClientMode) {
         if (container == null) return;
 
         File steamLink = new File(container.getRootDir(), ".wine/drive_c/Program Files (x86)/Steam");
-        File steamStore = getSharedSteamStore();
+        File pristineSteamStore = getSharedSteamStore();
+        File coldClientStore = getSharedColdClientStore();
+        File target = coldClientMode ? coldClientStore : pristineSteamStore;
         File previousSteamStore = new File(imageFs.getRootDir(), PREVIOUS_STEAM_CLIENT_STORE_RELATIVE_PATH);
         File previousContainerSteamStore = new File(container.getRootDir(), PREVIOUS_CONTAINER_STEAM_CLIENT_STORE_RELATIVE_PATH);
         File legacySteamStore = new File(container.getRootDir(), LEGACY_STEAM_CLIENT_STORE_RELATIVE_PATH);
 
         try {
-            moveSteamDirectoryIntoBackingStore(steamLink, steamStore);
-            migrateLegacySteamStoreIfNeeded(previousSteamStore, steamStore);
-            migrateLegacySteamStoreIfNeeded(previousContainerSteamStore, steamStore);
-            migrateLegacySteamStoreIfNeeded(legacySteamStore, steamStore);
+            moveSteamDirectoryIntoBackingStore(steamLink, pristineSteamStore);
+            migrateLegacySteamStoreIfNeeded(previousSteamStore, pristineSteamStore);
+            migrateLegacySteamStoreIfNeeded(previousContainerSteamStore, pristineSteamStore);
+            migrateLegacySteamStoreIfNeeded(legacySteamStore, pristineSteamStore);
 
             if (visible) {
-                if (!steamStore.exists()) {
-                    steamStore.mkdirs();
+                if (!target.exists()) {
+                    target.mkdirs();
                 }
-                if (steamLink.exists() && !FileUtils.isSymlink(steamLink)) {
+                // Unconditionally re-point the symlink. Cheap, and guarantees the target
+                // matches the current mode (ColdClient sidecar vs. pristine Steam store).
+                if (steamLink.exists()) {
                     FileUtils.delete(steamLink);
                 }
-                if (!FileUtils.isSymlink(steamLink) || !steamLink.exists()) {
-                    FileUtils.symlink(steamStore, steamLink);
-                    Log.d("XServerDisplayActivity", "Exposed Steam root via symlink: " + steamLink.getAbsolutePath());
-                }
+                FileUtils.symlink(target, steamLink);
+                Log.d("XServerDisplayActivity",
+                        "Steam symlink → " + (coldClientMode ? "coldclient-store" : "steam-client-store")
+                                + " at " + steamLink.getAbsolutePath());
             } else {
                 if (steamLink.exists()) {
                     FileUtils.delete(steamLink);
@@ -6022,6 +6005,58 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             return new File(imageFs.getRootDir(), STEAM_CLIENT_STORE_RELATIVE_PATH);
         }
         return new File(getFilesDir(), "imagefs/" + STEAM_CLIENT_STORE_RELATIVE_PATH);
+    }
+
+    private File getSharedColdClientStore() {
+        if (imageFs != null) {
+            return new File(imageFs.getRootDir(), COLDCLIENT_STORE_RELATIVE_PATH);
+        }
+        return new File(getFilesDir(), "imagefs/" + COLDCLIENT_STORE_RELATIVE_PATH);
+    }
+
+    /**
+     * Populate the ColdClient sidecar store (.shared/coldclient-store/) by extracting
+     * experimental-drm.tzst into it. Idempotent: returns true immediately if the loader
+     * is already present.
+     *
+     * The archive is laid out for extraction to imageFs.rootDir with the Goldberg/loader
+     * files under home/xuser/.wine/drive_c/Program Files (x86)/Steam/. Since the container's
+     * Steam symlink is pointed at the coldclient store before this is called, extraction
+     * writes through the symlink directly into the sidecar — keeping the real steam-client-store
+     * pristine forever.
+     */
+    private boolean ensureColdClientStore() {
+        File cstore = getSharedColdClientStore();
+        File loader = new File(cstore, "steamclient_loader_x64.exe");
+        File stub = new File(cstore, "steamclient64.dll");
+        if (loader.exists() && loader.length() > 0 && stub.exists() && stub.length() > 0) {
+            return true;
+        }
+
+        // Make sure the archive is on disk (downloaded from components if necessary)
+        if (!SteamBridge.ensureColdClientSupportReady(this)) {
+            Log.w("XServerDisplayActivity", "ensureColdClientStore: experimental-drm.tzst not available");
+            return false;
+        }
+        File expFile = new File(getFilesDir(), "experimental-drm.tzst");
+        if (!expFile.exists()) {
+            Log.w("XServerDisplayActivity", "ensureColdClientStore: experimental-drm.tzst missing from filesDir");
+            return false;
+        }
+
+        cstore.mkdirs();
+        try {
+            com.winlator.cmod.shared.io.TarCompressorUtils.extract(
+                    com.winlator.cmod.shared.io.TarCompressorUtils.Type.ZSTD,
+                    expFile, imageFs.getRootDir(), null);
+            Log.d("XServerDisplayActivity",
+                    "ensureColdClientStore: extracted experimental-drm.tzst into coldclient sidecar");
+        } catch (Exception e) {
+            Log.e("XServerDisplayActivity", "ensureColdClientStore: extraction failed", e);
+            return false;
+        }
+
+        return loader.exists() && stub.exists();
     }
 
     private void migrateLegacySteamStoreIfNeeded(File legacySteamStore, File steamStore) {
@@ -6458,14 +6493,19 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     : container.isLaunchRealSteam();
 
             if (launchRealSteamMode) {
-                // One-shot seed: only extract steam.tzst when the shared store is actually
-                // missing the Steam client. The shared-store + per-container symlink model means
-                // isSteamInstalled resolves through the symlink into .shared/steam-client-store,
-                // so re-extracting every launch is pure I/O waste.
-                if (!SteamBridge.isSteamInstalled(this)) {
-                    Log.d("XServerDisplayActivity", "Real Steam mode: seeding shared Steam client store (one-shot)");
+                // Seed or heal the shared Steam client store before launch.
+                // isSteamInstalled() only verifies file existence; isSharedSteamStorePristine()
+                // adds a size check that catches a Goldberg-stub overwrite (the #1 cause of
+                // Steam's "please reinstall" dialog after switching from ColdClient).
+                boolean needsSeed = !SteamBridge.isSteamInstalled(this);
+                boolean contaminated = !needsSeed && !SteamUtils.isSharedSteamStorePristine(this);
+                if (needsSeed || contaminated) {
+                    Log.d("XServerDisplayActivity",
+                            "Real Steam mode: " + (contaminated
+                                    ? "shared store contaminated (Goldberg stubs detected), force-extracting steam.tzst"
+                                    : "seeding shared Steam client store (one-shot)"));
                     if (!SteamBridge.forceExtractSteam(this)) {
-                        Log.w("XServerDisplayActivity", "Real Steam mode: failed to seed Steam client store");
+                        Log.w("XServerDisplayActivity", "Real Steam mode: failed to seed/heal Steam client store");
                     }
                 }
 
