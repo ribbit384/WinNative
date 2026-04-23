@@ -37,6 +37,7 @@ import com.winlator.cmod.shared.android.AppUtils
 import com.winlator.cmod.shared.io.AssetPaths
 import com.winlator.cmod.runtime.wine.DefaultVersion
 import com.winlator.cmod.runtime.wine.EnvVars
+import com.winlator.cmod.runtime.wine.WineLocaleUtils
 import com.winlator.cmod.shared.io.FileUtils
 import com.winlator.cmod.shared.util.KeyValueSet
 import com.winlator.cmod.shared.theme.WinNativeTheme
@@ -52,7 +53,6 @@ import com.winlator.cmod.runtime.display.winhandler.WinHandler
 import com.winlator.cmod.runtime.display.environment.ImageFs
 import org.json.JSONObject
 import java.io.File
-import java.util.Locale
 import java.util.concurrent.Executors
 
 /**
@@ -318,9 +318,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         state.isSteamGame.value = false
 
         state.execArgs.value = c?.getExecArgs() ?: ""
-        state.lcAll.value = c?.getLC_ALL() ?: (
-            Locale.getDefault().language + "_" + Locale.getDefault().country + ".UTF-8"
-            )
+        state.lcAll.value = WineLocaleUtils.normalize(c?.getLC_ALL())
 
         val cpuCount = Runtime.getRuntime().availableProcessors()
         state.cpuCount.intValue = cpuCount
@@ -444,7 +442,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             )
         }
 
-        state.localeOptions.value = context.resources.getStringArray(R.array.some_lc_all).toList()
+        state.localeOptions.value = WineLocaleUtils.options
         state.winComponentEntries.value =
             context.resources.getStringArray(R.array.wincomponent_entries).toList()
         state.dInputMapperTypeEntries.value =
@@ -695,7 +693,9 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             c.setFEXCorePreset(fexcorePreset)
             c.setDesktopTheme(desktopTheme)
             c.setMidiSoundFont(midiSoundFont)
-            c.setLC_ALL(state.lcAll.value)
+            val normalizedLcAll = WineLocaleUtils.normalize(state.lcAll.value)
+            state.lcAll.value = normalizedLcAll
+            c.setLC_ALL(normalizedLcAll)
             c.setExecArgs(state.execArgs.value)
             // Steam fields are intentionally not written — container edit UI
             // doesn't expose them, and saveData() round-trips the loaded
@@ -731,7 +731,9 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
                 data.put("desktopTheme", desktopTheme)
                 data.put("wineVersion", selectedWineStr)
                 data.put("midiSoundFont", midiSoundFont)
-                data.put("lc_all", state.lcAll.value)
+                val normalizedLcAll = WineLocaleUtils.normalize(state.lcAll.value)
+                state.lcAll.value = normalizedLcAll
+                data.put("lc_all", normalizedLcAll)
                 data.put("execArgs", state.execArgs.value)
 
                 preloaderDialog.show(R.string.containers_list_creating)

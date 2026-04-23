@@ -99,6 +99,7 @@ import com.winlator.cmod.shared.util.StringUtils;
 import com.winlator.cmod.shared.io.TarCompressorUtils;
 import com.winlator.cmod.runtime.wine.WineInfo;
 import com.winlator.cmod.runtime.wine.WineRegistryEditor;
+import com.winlator.cmod.runtime.wine.WineLocaleUtils;
 import com.winlator.cmod.runtime.wine.WineRequestHandler;
 import com.winlator.cmod.runtime.wine.WineStartMenuCreator;
 import com.winlator.cmod.runtime.wine.WineThemeManager;
@@ -854,7 +855,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         String dxwrapperConfig = container.getDXWrapperConfig();
         screenSize = container.getScreenSize();
         winHandler.setInputType((byte) container.getInputType());
-        lc_all = container.getLC_ALL();
+        lc_all = WineLocaleUtils.normalize(container.getLC_ALL());
 
         // Log the entire intent to verify the extras
         Intent intent = getIntent();
@@ -1024,7 +1025,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             String rawShortcutStartupSelection = shortcutUsesDefaults ? "" : shortcut.getExtra("startupSelection");
 
             screenSize = getShortcutSetting("screenSize", container.getScreenSize());
-            lc_all = getShortcutSetting("lc_all", container.getLC_ALL());
+            lc_all = WineLocaleUtils.normalize(getShortcutSetting("lc_all", container.getLC_ALL()));
             midiSoundFont = getShortcutSetting("midiSoundFont", container.getMIDISoundFont());
 
             Log.d("XServerDisplayActivity", "ScreenSize source=shortcutOrContainer shortcutRaw='" +

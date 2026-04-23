@@ -55,6 +55,7 @@ import com.winlator.cmod.shared.android.RefreshRateUtils
 import com.winlator.cmod.shared.theme.WinNativeTheme
 import com.winlator.cmod.shared.util.StringUtils
 import com.winlator.cmod.runtime.wine.WineInfo
+import com.winlator.cmod.runtime.wine.WineLocaleUtils
 import com.winlator.cmod.runtime.compat.fexcore.FEXCoreManager
 import com.winlator.cmod.runtime.compat.fexcore.FEXCorePreset
 import com.winlator.cmod.runtime.compat.fexcore.FEXCorePresetManager
@@ -392,7 +393,7 @@ class ShortcutSettingsComposeDialog private constructor(
         state.fullscreenStretched.value = fullscreenStretched == "1"
 
         // LC_ALL
-        state.lcAll.value = getShortcutSetting("lc_all", container.getLC_ALL())
+        state.lcAll.value = WineLocaleUtils.normalize(getShortcutSetting("lc_all", container.getLC_ALL()))
 
         // CPU Affinity
         val cpuList = getShortcutSetting("cpuList", container.getCPUList(true))
@@ -516,8 +517,7 @@ class ShortcutSettingsComposeDialog private constructor(
         )
 
         // Locales
-        val locales = context.resources.getStringArray(R.array.some_lc_all).toList()
-        state.localeOptions.value = locales
+        state.localeOptions.value = WineLocaleUtils.options
 
         // Win component entries
         val winCompEntries =
@@ -1020,8 +1020,14 @@ class ShortcutSettingsComposeDialog private constructor(
                 hasContainerOverride or saveOverride("midiSoundFont", midiSoundFont, container.getMIDISoundFont())
 
             // LC_ALL
+            val normalizedLcAll = WineLocaleUtils.normalize(state.lcAll.value)
+            state.lcAll.value = normalizedLcAll
             hasContainerOverride =
-                hasContainerOverride or saveOverride("lc_all", state.lcAll.value, container.getLC_ALL())
+                hasContainerOverride or saveOverride(
+                    "lc_all",
+                    normalizedLcAll,
+                    WineLocaleUtils.normalize(container.getLC_ALL())
+                )
 
             // Fullscreen stretched
             hasContainerOverride = hasContainerOverride or saveOverride(
@@ -1951,7 +1957,7 @@ class ShortcutSettingsComposeDialog private constructor(
             state.selectedMidiSoundFont.intValue = if (idx >= 0) idx else 0
         }
 
-        state.lcAll.value = container.getLC_ALL()
+        state.lcAll.value = WineLocaleUtils.normalize(container.getLC_ALL())
         state.fullscreenStretched.value = container.isFullscreenStretched
         state.showFPS.value = container.isShowFPS
 

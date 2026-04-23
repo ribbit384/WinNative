@@ -90,6 +90,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.winlator.cmod.R
+import com.winlator.cmod.runtime.wine.WineLocaleUtils
 import com.winlator.cmod.shared.ui.widget.EnvVarsView
 import com.winlator.cmod.shared.ui.widget.chasingBorder
 import kotlin.math.roundToInt
@@ -236,7 +237,7 @@ class GameSettingsStateHolder {
     val wineVersionDisplay = mutableStateOf("")
     val emulatorsEnabled = mutableStateOf(true)
     val lcAll = mutableStateOf("")
-    val localeOptions = mutableStateOf<List<String>>(emptyList())
+    val localeOptions = mutableStateOf<List<WineLocaleUtils.Option>>(emptyList())
     val desktopThemeEntries = mutableStateOf<List<String>>(emptyList())
     val selectedDesktopTheme = mutableIntStateOf(0)
 
@@ -2055,10 +2056,10 @@ private fun WineSection(
                     state.localeOptions.value.forEach { locale ->
                         DropdownMenuItem(
                             text = {
-                                Text(locale, color = TextPrimary, fontSize = 13.sp)
+                                Text(locale.label, color = TextPrimary, fontSize = 13.sp)
                             },
                             onClick = {
-                                state.lcAll.value = locale
+                                state.lcAll.value = locale.value
                                 showLocalePicker = false
                             }
                         )
