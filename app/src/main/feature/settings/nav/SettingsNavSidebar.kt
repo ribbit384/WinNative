@@ -291,6 +291,7 @@ private fun NavItemRow(
                 ).then(
                     if (isSelected) {
                         Modifier.chasingBorder(
+                            isFocused = true,
                             paused = borderPaused,
                             animationDurationMs = 8200,
                             borderWidth = 1.5.dp,

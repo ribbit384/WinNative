@@ -25,14 +25,14 @@ import androidx.compose.ui.unit.dp
  * Uses Compose's [rememberInfiniteTransition] for smooth, frame-accurate animation.
  */
 fun Modifier.chasingBorder(
-    isFocused: Boolean = true,
+    isFocused: Boolean = false,
     paused: Boolean = false,
     cornerRadius: Dp = 8.dp,
     borderWidth: Dp = 4.dp,
     animationDurationMs: Int = 5000,
 ): Modifier =
     composed {
-        if (!isFocused) return@composed this
+        if (!isFocused || paused) return@composed this
 
         val density = LocalDensity.current.density
         val cornerRadiusPx = cornerRadius.value * density
@@ -103,8 +103,7 @@ fun Modifier.chasingBorder(
 
                     // Read the animated value in draw so 120 Hz devices only redraw the border
                     // instead of forcing a full recomposition every frame.
-                    val rotationDegrees = if (paused) 0f else animatedRotation.value
-                    matrix.setRotate(rotationDegrees, w / 2f, h / 2f)
+                    matrix.setRotate(animatedRotation.value, w / 2f, h / 2f)
                     shader.setLocalMatrix(matrix)
 
                     drawContext.canvas.nativeCanvas.drawPath(path, paint)
