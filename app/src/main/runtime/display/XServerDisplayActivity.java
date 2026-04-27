@@ -104,6 +104,7 @@ import com.winlator.cmod.runtime.wine.WineThemeManager;
 import com.winlator.cmod.runtime.wine.WineUtils;
 import com.winlator.cmod.runtime.compat.fexcore.FEXCoreManager;
 import com.winlator.cmod.runtime.compat.gamefixes.GameFixes;
+import com.winlator.cmod.runtime.audio.alsaserver.ALSAClient;
 import com.winlator.cmod.runtime.input.ControllerAssignmentDialog;
 import com.winlator.cmod.runtime.input.InputControlsDialog;
 import com.winlator.cmod.runtime.input.controls.ControlsProfile;
@@ -349,7 +350,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
     private final SharedPreferences.OnSharedPreferenceChangeListener prefListener = (sharedPreferences, key) -> {
         if ("gyro_enabled".equals(key) || "mouse_gyro_enabled".equals(key)) {
-            boolean gyroEnabled = sharedPreferences.getBoolean("gyro_enabled", false) || sharedPreferences.getBoolean("mouse_gyro_enabled", false);
+            boolean gyroEnabled = sharedPreferences.getBoolean("gyro_enabled", false);
             if (gyroEnabled) {
                 sensorManager.registerListener(gyroListener, gyroSensor, SensorManager.SENSOR_DELAY_GAME);
             } else {
@@ -566,7 +567,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
         preferences.registerOnSharedPreferenceChangeListener(prefListener);
 
-        boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false) || preferences.getBoolean("mouse_gyro_enabled", false);
+        boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false);
 
         if (gyroEnabled) {
             // Register the sensor event listener
@@ -1606,7 +1607,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     public void onResume() {
         super.onResume();
         applyPreferredRefreshRate();
-        boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false) || preferences.getBoolean("mouse_gyro_enabled", false);
+        boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false);
 
         if (gyroEnabled) {
             // Re-register the sensor listener when the activity is resumed
@@ -1635,7 +1636,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     @Override
     public void onPause() {
         super.onPause();
-        boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false) || preferences.getBoolean("mouse_gyro_enabled", false);
+        boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false);
 
         if (gyroEnabled) {
             // Unregister the sensor listener when the activity is paused
@@ -2730,7 +2731,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 hudElements,
                 dualSeriesBattery,
                 hudCardExpanded,
-                preferences.getBoolean("gyro_enabled", false) || preferences.getBoolean("mouse_gyro_enabled", false),
+                preferences.getBoolean("gyro_enabled", false),
                 preferences.getInt("gyro_mode", 0),
                 currentGyroActivatorLabel(),
                 preferences.getBoolean("process_gyro_with_left_trigger", false),
@@ -2795,9 +2796,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     public void onGyroscopeEnabledChanged(boolean enabled) {
                         SharedPreferences.Editor editor = preferences.edit();
                         editor.putBoolean("gyro_enabled", enabled);
-                        if (!enabled) {
-                            editor.putBoolean("mouse_gyro_enabled", false);
-                        }
                         editor.apply();
                         renderDrawerMenu();
                     }
@@ -3188,8 +3186,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             setSteamClientVisibility(false);
         }
 
-        if (launchRealSteamSetup || isSteamGame) {
-            Log.d("XServerDisplayActivity", "Ensuring Steam client is ready (isSteamGame=" + isSteamGame + ")...");
+        if (launchRealSteamSetup) {
+            Log.d("XServerDisplayActivity", "Ensuring real Steam client is ready...");
             boolean steamReady = false;
             while (!steamReady) {
                 steamReady = SteamBridge.ensureSteamReady(this);
@@ -3204,16 +3202,19 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 }
             }
 
-            // Download and extract the experimental-drm file to provide steamclient_loader_x64.exe
-            if (isSteamGame && !launchRealSteamSetup) {
-                SteamBridge.ensureColdClientSupportReady(this);
-            } else if (launchRealSteamSetup) {
-                SteamBridge.ensureRealSteamSupportReady(this);
-            }
+            SteamBridge.ensureRealSteamSupportReady(this);
 
             // Verify essential Steam client DLLs exist in the wine prefix
-            verifySteamClientFiles(isSteamGame && !launchRealSteamSetup);
+            verifySteamClientFiles(false);
+        } else if (isSteamGame) {
+            Log.d("XServerDisplayActivity", "Real Steam client disabled; preparing ColdClient support only");
+            SteamBridge.ensureColdClientSupportReady(this);
 
+            // Verify ColdClient loader/support files without downloading or extracting steam.tzst.
+            verifySteamClientFiles(true);
+        }
+
+        if (launchRealSteamSetup || isSteamGame) {
             // Replace the game's steam_api DLLs and set up steam_settings for auth
             if (isSteamGame) {
                 try {
@@ -3260,6 +3261,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                             MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_DLL_REPLACED);
                             MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_COLDCLIENT_USED);
                             MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_DRM_PATCHED);
+                            MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_DRM_UNPACK_CHECKED);
 
                             // Clean up a side-effect of an old "MoveSteamExe" hack: if a game
                             // dir still has a local steam.exe copy, real Steam's integrity
@@ -3633,7 +3635,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             envVars.put("ANDROID_ASERVER_USE_SHM", "true");
             environment.addComponent(
                     new ALSAServerComponent(
-                            UnixSocketConfig.createSocket(rootPath, UnixSocketConfig.ALSA_SERVER_PATH)
+                            UnixSocketConfig.createSocket(rootPath, UnixSocketConfig.ALSA_SERVER_PATH),
+                            ALSAClient.Options.fromEnvVars(envVars)
                     )
             );
         } else if (audioDriver.equals("pulseaudio")) {
@@ -4006,6 +4009,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
         // Initialize checkbox states
         dialog.getShowTouchscreenControls().setValue(preferences.getBoolean("show_touchscreen_controls_enabled", false));
+        dialog.getOverlayOpacity().setValue(preferences.getFloat("overlay_opacity", InputControlsView.DEFAULT_OVERLAY_OPACITY));
         dialog.getTouchscreenHaptics().setValue(preferences.getBoolean("touchscreen_haptics_enabled", false));
         dialog.getGamepadVibration().setValue(preferences.getBoolean(ControllerManager.PREF_VIBRATION_GLOBAL, true));
 
@@ -4035,10 +4039,13 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         // Confirm callback
         dialog.setOnConfirmCallback(() -> {
             inputControlsView.setShowTouchscreenControls(dialog.getShowTouchscreenControls().getValue());
+            float overlayOpacity = dialog.getOverlayOpacity().getValue();
+            inputControlsView.setOverlayOpacity(overlayOpacity);
             boolean isHapticsEnabled = dialog.getTouchscreenHaptics().getValue();
             boolean isGamepadVibrationEnabled = dialog.getGamepadVibration().getValue();
             SharedPreferences.Editor editor = preferences.edit();
             editor.putBoolean("show_touchscreen_controls_enabled", dialog.getShowTouchscreenControls().getValue());
+            editor.putFloat("overlay_opacity", overlayOpacity);
             editor.putBoolean("touchscreen_haptics_enabled", isHapticsEnabled);
             editor.putBoolean(ControllerManager.PREF_VIBRATION_GLOBAL, isGamepadVibrationEnabled);
             editor.apply();
@@ -4921,12 +4928,13 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
         if (!allPresent) {
             Log.w("XServerDisplayActivity", "Steam client files missing in container, forcing re-extraction");
-            // Force re-extraction by extracting both archives to imageFs root
-            // The xuser symlink will direct files to the active container
+            // Force re-extraction by extracting the archive required by the active mode.
+            // Real Steam mode uses steam.tzst. ColdClient mode uses only experimental-drm.tzst
+            // so normal Steam game launches do not download or unpack the full Steam client.
             try {
                 File steamFile = new File(getFilesDir(), "steam.tzst");
                 File expFile = new File(getFilesDir(), "experimental-drm.tzst");
-                if (steamFile.exists()) {
+                if (!requireColdClientSupport && steamFile.exists()) {
                     com.winlator.cmod.shared.io.TarCompressorUtils.extract(
                             com.winlator.cmod.shared.io.TarCompressorUtils.Type.ZSTD,
                             steamFile, imageFs.getRootDir(), null);
@@ -5895,6 +5903,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             Log.w("XServerDisplayActivity", "Skipping Steamless — Mono not installed yet, will retry next launch");
             return;
         }
+        if (isSteamUnpackAlreadyHandled()) {
+            Log.d("XServerDisplayActivity", "Skipping Steamless/unpack check; executable already handled");
+            return;
+        }
         boolean unpackedExeExists = doesUnpackedExeExist();
         if (needsUnpacking || unpackFiles || !unpackedExeExists) {
             if (needsUnpacking || !unpackedExeExists) {
@@ -5904,6 +5916,77 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 // in case something (e.g. mode switch) restored the original.
                 ensureUnpackedExeActive();
             }
+        }
+    }
+
+    private boolean isSteamUnpackAlreadyHandled() {
+        if (shortcut == null || !"STEAM".equals(shortcut.getExtra("game_source"))) return false;
+        try {
+            int appId = Integer.parseInt(shortcut.getExtra("app_id"));
+            String gameInstallPath = resolveSteamGameInstallPath(appId);
+            if (gameInstallPath == null || gameInstallPath.isEmpty()) return false;
+
+            SteamExecutableInfo executableInfo = resolveSteamExecutableInfo(appId, gameInstallPath);
+            if (executableInfo == null) return false;
+
+            File unpackedExe = new File(gameInstallPath, executableInfo.relativePath + ".unpacked.exe");
+            File originalExe = new File(gameInstallPath, executableInfo.relativePath + ".original.exe");
+            if (MarkerUtils.INSTANCE.hasMarker(gameInstallPath, Marker.STEAM_DRM_PATCHED)
+                    && unpackedExe.exists()
+                    && originalExe.exists()) {
+                ensureUnpackedExeActive();
+                return true;
+            }
+
+            File checkedMarker = new File(gameInstallPath, Marker.STEAM_DRM_UNPACK_CHECKED.getFileName());
+            String expectedSignature = buildSteamUnpackSignature(executableInfo);
+            String actualSignature = checkedMarker.exists() ? FileUtils.readString(checkedMarker) : null;
+            return expectedSignature.equals(actualSignature);
+        } catch (Exception e) {
+            Log.w("XServerDisplayActivity", "Steamless handled-state check failed", e);
+            return false;
+        }
+    }
+
+    private void markSteamUnpackChecked(int appId, String gameInstallPath, String executablePath) {
+        try {
+            File exe = new File(gameInstallPath, executablePath.replace('\\', '/'));
+            if (!exe.exists()) return;
+            SteamExecutableInfo executableInfo =
+                    new SteamExecutableInfo(executablePath.replace('\\', '/'), exe);
+            File checkedMarker = new File(gameInstallPath, Marker.STEAM_DRM_UNPACK_CHECKED.getFileName());
+            FileUtils.writeString(checkedMarker, buildSteamUnpackSignature(executableInfo));
+        } catch (Exception e) {
+            Log.w("XServerDisplayActivity", "Failed to write Steamless checked marker", e);
+        }
+    }
+
+    private SteamExecutableInfo resolveSteamExecutableInfo(int appId, String gameInstallPath) {
+        String executablePath = container.getExecutablePath();
+        if (executablePath == null || executablePath.isEmpty()) {
+            executablePath = com.winlator.cmod.feature.stores.steam.service.SteamService.Companion.getInstalledExe(appId);
+        }
+        if (executablePath == null || executablePath.isEmpty()) return null;
+
+        String relativePath = executablePath.replace('\\', '/');
+        File exe = new File(gameInstallPath, relativePath);
+        if (!exe.exists()) return null;
+        return new SteamExecutableInfo(relativePath, exe);
+    }
+
+    private String buildSteamUnpackSignature(SteamExecutableInfo executableInfo) {
+        return executableInfo.relativePath + "\n"
+                + executableInfo.file.length() + "\n"
+                + executableInfo.file.lastModified() + "\n";
+    }
+
+    private static class SteamExecutableInfo {
+        final String relativePath;
+        final File file;
+
+        SteamExecutableInfo(String relativePath, File file) {
+            this.relativePath = relativePath;
+            this.file = file;
         }
     }
 
@@ -6272,6 +6355,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                             "Steamless: game does not use SteamStub DRM (all unpackers failed). "
                             + "Disabling Legacy DRM for this game to avoid future overhead.");
                     launcher.execShellCommand("wineserver -k");
+                    markSteamUnpackChecked(appId, gameInstallPath, executablePath);
                     container.setNeedsUnpacking(false);
                     container.saveData();
                 } else {
