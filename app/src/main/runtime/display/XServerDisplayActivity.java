@@ -3499,6 +3499,145 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         Log.d("ContainerLaunch", "=== setupWineSystemFiles END === container=" + container.id + " firstTimeBoot=" + firstTimeBoot);
     }
 
+    private void configureLsfgEnvVars() {
+        if (shortcut == null || imageFs == null) {
+            envVars.put("DISABLE_LSFG", "1");
+            return;
+        }
+
+        boolean enabled = "1".equals(shortcut.getExtra("lsfgEnabled", "0"));
+        if (!enabled) {
+            envVars.put("DISABLE_LSFG", "1");
+            return;
+        }
+
+        String dllPath = shortcut.getExtra("lsfgDllPath", "");
+        if (dllPath.isEmpty() || !new File(dllPath).isFile()) {
+            Log.w("XServerDisplayActivity", "LSFG requested but no imported Lossless.dll is available");
+            envVars.put("DISABLE_LSFG", "1");
+            return;
+        }
+
+        envVars.remove("DISABLE_LSFG");
+
+        File layerLibrary = GuestProgramLauncherComponent.ensureImageFsNativeLibrary(this, imageFs, "liblsfg-vk.so");
+        if (!layerLibrary.exists()) {
+            Log.w("XServerDisplayActivity", "LSFG requested but liblsfg-vk.so is not available");
+            envVars.put("DISABLE_LSFG", "1");
+            return;
+        }
+
+        File implicitLayerDir = new File(imageFs.getShareDir(), "vulkan/implicit_layer.d");
+        File explicitLayerDir = new File(imageFs.getShareDir(), "vulkan/explicit_layer.d");
+        implicitLayerDir.mkdirs();
+        explicitLayerDir.mkdirs();
+        writeLsfgLayerManifest(
+                new File(implicitLayerDir, "VkLayer_LS_frame_generation.json"),
+                layerLibrary
+        );
+
+        envVars.put("VK_INSTANCE_LAYERS", appendListValue(
+                envVars.get("VK_INSTANCE_LAYERS"),
+                "VK_LAYER_LS_frame_generation",
+                ":"
+        ));
+        envVars.put("VK_LAYER_PATH", appendListValue(
+                envVars.get("VK_LAYER_PATH"),
+                implicitLayerDir.getAbsolutePath() + ":" + explicitLayerDir.getAbsolutePath(),
+                ":"
+        ));
+
+        envVars.put("LSFG_LEGACY", "1");
+        envVars.put("LSFG_MULTIPLIER", clampStringInt(shortcut.getExtra("lsfgMultiplier", "2"), 2, 4));
+        envVars.put("LSFG_FLOW_SCALE", clampStringFloat(shortcut.getExtra("lsfgFlowScale", "1.0"), 0.25f, 1.0f));
+        envVars.put("LSFG_PERFORMANCE_MODE", shortcut.getExtra("lsfgPerformanceMode", "1"));
+        envVars.put("LSFG_HDR_MODE", shortcut.getExtra("lsfgHdrMode", "0"));
+        envVars.put("LSFG_EXPERIMENTAL_PRESENT_MODE", normalizeLsfgPresentMode(shortcut.getExtra("lsfgPresentMode", "fifo")));
+        File lsfgTmpDir = new File(imageFs.getTmpDir(), "lsfg-vk");
+        lsfgTmpDir.mkdirs();
+        File lsfgConfig = new File(lsfgTmpDir, "conf.toml");
+        FileUtils.writeString(lsfgConfig, "version = 1\n[global]\n");
+        envVars.put("LSFG_CONFIG", lsfgConfig.getAbsolutePath());
+        envVars.put("LSFG_LAST_PATH", new File(lsfgTmpDir, "lsfg-vk_last").getAbsolutePath());
+        envVars.put("TMPDIR", lsfgTmpDir.getAbsolutePath());
+
+        envVars.put("LSFG_DLL_PATH", dllPath);
+        envVars.put("LSFG_DLL_PATH_UNIX", dllPath);
+
+        String processExe = shortcut.getExtra("launch_exe_path", "");
+        if (processExe.isEmpty()) processExe = shortcut.path;
+        if (processExe != null && !processExe.isEmpty()) {
+            String processName = new File(processExe).getName();
+            envVars.put("LSFG_PROCESS", processName);
+            envVars.put("LSFG_PROCESS_EXE", processName);
+        }
+
+        Log.d("XServerDisplayActivity", "LSFG enabled: dllPath='" + dllPath + "' multiplier="
+                + envVars.get("LSFG_MULTIPLIER") + " flowScale=" + envVars.get("LSFG_FLOW_SCALE"));
+    }
+
+    private void writeLsfgLayerManifest(File manifestFile, File layerLibrary) {
+        String manifest = "{\n" +
+                "  \"file_format_version\": \"1.0.0\",\n" +
+                "  \"layer\": {\n" +
+                "    \"name\": \"VK_LAYER_LS_frame_generation\",\n" +
+                "    \"type\": \"GLOBAL\",\n" +
+                "    \"api_version\": \"1.4.313\",\n" +
+                "    \"library_path\": \"" + layerLibrary.getAbsolutePath().replace("\\", "\\\\") + "\",\n" +
+                "    \"implementation_version\": \"1\",\n" +
+                "    \"description\": \"Lossless Scaling frame generation layer\",\n" +
+                "    \"functions\": {\n" +
+                "      \"vkGetInstanceProcAddr\": \"layer_vkGetInstanceProcAddr\",\n" +
+                "      \"vkGetDeviceProcAddr\": \"layer_vkGetDeviceProcAddr\"\n" +
+                "    },\n" +
+                "    \"disable_environment\": {\n" +
+                "      \"DISABLE_LSFG\": \"1\"\n" +
+                "    }\n" +
+                "  }\n" +
+                "}\n";
+        FileUtils.writeString(manifestFile, manifest);
+    }
+
+    private static String appendListValue(String current, String value, String separator) {
+        if (value == null || value.isEmpty()) return current == null ? "" : current;
+        if (current == null || current.isEmpty()) return value;
+        for (String part : current.split(Pattern.quote(separator))) {
+            if (part.equals(value)) return current;
+        }
+        return current + separator + value;
+    }
+
+    private static String clampStringInt(String value, int min, int max) {
+        try {
+            int parsed = Integer.parseInt(value);
+            return String.valueOf(Math.max(min, Math.min(max, parsed)));
+        } catch (Exception ignored) {
+            return String.valueOf(min);
+        }
+    }
+
+    private static String clampStringFloat(String value, float min, float max) {
+        try {
+            float parsed = Float.parseFloat(value);
+            float clamped = Math.max(min, Math.min(max, parsed));
+            return String.format(Locale.US, "%.2f", clamped);
+        } catch (Exception ignored) {
+            return String.format(Locale.US, "%.2f", max);
+        }
+    }
+
+    private static String normalizeLsfgPresentMode(String value) {
+        if (value == null) return "fifo";
+        switch (value.toLowerCase(Locale.ROOT)) {
+            case "mailbox":
+                return "mailbox";
+            case "immediate":
+                return "immediate";
+            default:
+                return "fifo";
+        }
+    }
+
     private void setupXEnvironment() throws PackageManager.NameNotFoundException {
         cleanupLingeringSessionProcesses("new launch");
 
@@ -3576,6 +3715,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             // Normalize synchronization environment variables (NTSync / ESync).
             // This auto-detects NTSync and falls back to ESync when unavailable.
             normalizeSyncEnvVars(envVars);
+            configureLsfgEnvVars();
 
             ArrayList<String> bindingPaths = new ArrayList<>();
             String drives = shortcut != null ? getShortcutSetting("drives", container.getDrives()) : container.getDrives();

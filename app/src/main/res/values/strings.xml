@@ -6,6 +6,7 @@
     <string name="common_ui_run">Run</string>
     <string name="common_ui_edit">Edit</string>
     <string name="common_ui_remove">Remove</string>
+    <string name="common_ui_change">Change</string>
     <string name="common_ui_add">Add</string>
     <string name="common_ui_shortcuts">Shortcuts</string>
     <string name="common_ui_containers">Containers</string>
@@ -37,6 +38,18 @@
     <string name="common_ui_version">Version</string>
     <string name="common_ui_advanced">Advanced</string>
     <string name="common_ui_graphics">Graphics</string>
+    <string name="settings_lsfg_title">LSFG</string>
+    <string name="settings_lsfg_enable">Enable LSFG</string>
+    <string name="settings_lsfg_lossless_dll">Lossless.dll</string>
+    <string name="settings_lsfg_no_dll_imported">No DLL imported</string>
+    <string name="settings_lsfg_frame_generation">Frame Generation</string>
+    <string name="settings_lsfg_multiplier">Multiplier</string>
+    <string name="settings_lsfg_flow_scale">Flow Scale</string>
+    <string name="settings_lsfg_performance_mode">Performance Mode</string>
+    <string name="settings_lsfg_hdr_mode">HDR Mode</string>
+    <string name="settings_lsfg_present_mode">Present Mode</string>
+    <string name="settings_lsfg_select_valid_dll">Select a .dll file</string>
+    <string name="settings_lsfg_import_failed">Unable to import DLL</string>
     <string name="common_ui_system">System</string>
     <string name="common_ui_width">Width</string>
     <string name="common_ui_height">Height</string>

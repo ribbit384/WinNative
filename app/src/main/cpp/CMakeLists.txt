@@ -6,6 +6,47 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -Wno-unused-function -Wimplicit-function
 
 add_subdirectory(patchelf)
 add_subdirectory(adrenotools)
+set(LSFGVK_ANDROID_WINE ON CACHE BOOL "Build lsfg-vk for Winlator" FORCE)
+if(ANDROID)
+        set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_ANDROID_KHR CACHE STRING "Vulkan platform defines for volk" FORCE)
+        add_compile_definitions(VK_USE_PLATFORM_ANDROID_KHR)
+endif()
+add_subdirectory(lsfg)
+if(TARGET lsfg-vk)
+        set(LSFGVK_MAIN_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/lsfg/src/main.cpp")
+        set(LSFGVK_PATCHED_MAIN_DIR "${CMAKE_CURRENT_BINARY_DIR}/lsfg-winlator")
+        set(LSFGVK_PATCHED_MAIN "${LSFGVK_PATCHED_MAIN_DIR}/main.cpp")
+        file(MAKE_DIRECTORY "${LSFGVK_PATCHED_MAIN_DIR}")
+        file(READ "${LSFGVK_MAIN_SOURCE}" LSFGVK_MAIN_CONTENT)
+        string(REPLACE
+                "std::ofstream latest(\"/tmp/lsfg-vk_last\", std::ios::trunc);"
+                "const char* latestPathEnv = std::getenv(\"LSFG_LAST_PATH\");\n            const std::string latestPath = latestPathEnv && *latestPathEnv != '\\0' ? std::string(latestPathEnv) : std::string(\"/tmp/lsfg-vk_last\");\n            std::ofstream latest(latestPath, std::ios::trunc);"
+                LSFGVK_MAIN_CONTENT "${LSFGVK_MAIN_CONTENT}")
+        string(REPLACE
+                "throw std::runtime_error(\"Failed to open /tmp/lsfg-vk_last for writing\");"
+                "throw std::runtime_error(\"Failed to open \" + latestPath + \" for writing\");"
+                LSFGVK_MAIN_CONTENT "${LSFGVK_MAIN_CONTENT}")
+        string(REPLACE
+                "throw std::runtime_error(\"Failed to write to /tmp/lsfg-vk_last\");"
+                "throw std::runtime_error(\"Failed to write to \" + latestPath);"
+                LSFGVK_MAIN_CONTENT "${LSFGVK_MAIN_CONTENT}")
+        file(WRITE "${LSFGVK_PATCHED_MAIN}" "${LSFGVK_MAIN_CONTENT}")
+
+        get_target_property(LSFGVK_SOURCES lsfg-vk SOURCES)
+        set(LSFGVK_FILTERED_SOURCES)
+        foreach(LSFGVK_SOURCE IN LISTS LSFGVK_SOURCES)
+                if(IS_ABSOLUTE "${LSFGVK_SOURCE}")
+                        set(LSFGVK_SOURCE_ABS "${LSFGVK_SOURCE}")
+                else()
+                        get_filename_component(LSFGVK_SOURCE_ABS "${LSFGVK_SOURCE}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lsfg")
+                endif()
+                if(NOT LSFGVK_SOURCE_ABS STREQUAL LSFGVK_MAIN_SOURCE)
+                        list(APPEND LSFGVK_FILTERED_SOURCES "${LSFGVK_SOURCE}")
+                endif()
+        endforeach()
+        set_property(TARGET lsfg-vk PROPERTY SOURCES ${LSFGVK_FILTERED_SOURCES})
+        target_sources(lsfg-vk PRIVATE "${LSFGVK_PATCHED_MAIN}")
+endif()
 
 # Add Winlator shared library
 add_library(winlator SHARED

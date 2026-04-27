@@ -102,6 +102,8 @@ class ShortcutSettingsComposeDialog private constructor(
     private var fexcorePresetIds = mutableListOf<String>()
     private var shouldRefreshLibraryOnSave = false
     private var pendingArtworkTarget = LibraryArtworkTarget.GAME_CARD
+    private var originalLsfgDllPath = ""
+    private var pendingLsfgDllPath = ""
 
     // SDL2 Compatibility env vars — must match ContainerDetailFragment.SDL2_ENV_VARS.
     private val sdl2EnvVars = listOf(
@@ -145,6 +147,15 @@ class ShortcutSettingsComposeDialog private constructor(
         ) { uri: Uri? ->
             if (uri == null) return@register
             saveSelectedArtwork(uri)
+        }
+
+    private val lsfgDllPickerLauncher: ActivityResultLauncher<Array<String>>? =
+        (activity as? ComponentActivity)?.activityResultRegistry?.register(
+            "shortcut_lsfg_dll_picker",
+            ActivityResultContracts.OpenDocument()
+        ) { uri: Uri? ->
+            if (uri == null) return@register
+            importLsfgDll(uri)
         }
 
     init {
@@ -207,6 +218,7 @@ class ShortcutSettingsComposeDialog private constructor(
             }
 
             override fun onDismiss() {
+                discardPendingLsfgDllImport()
                 dismiss()
             }
 
@@ -274,6 +286,14 @@ class ShortcutSettingsComposeDialog private constructor(
                         ),
                     )
                 }
+            }
+
+            override fun onImportLsfgDll() {
+                lsfgDllPickerLauncher?.launch(arrayOf("*/*"))
+            }
+
+            override fun onClearLsfgDll() {
+                clearLsfgDll()
             }
 
             override fun onRemoveEnvVar(index: Int) {
@@ -420,6 +440,22 @@ class ShortcutSettingsComposeDialog private constructor(
 
         // Env Vars
         loadEnvVars()
+
+        // LSFG
+        state.lsfgEnabled.value = shortcut.getExtra("lsfgEnabled", "0") == "1"
+        originalLsfgDllPath = shortcut.getExtra("lsfgDllPath", "")
+        state.lsfgDllPath.value = originalLsfgDllPath
+        val lsfgMultiplier = shortcut.getExtra("lsfgMultiplier", "2").toIntOrNull() ?: 2
+        state.lsfgSelectedMultiplier.intValue = (lsfgMultiplier - 2).coerceIn(0, 2)
+        val flowScale = shortcut.getExtra("lsfgFlowScale", "1.0").toFloatOrNull() ?: 1.0f
+        state.lsfgFlowScale.intValue = (flowScale * 100f).toInt().coerceIn(25, 100)
+        state.lsfgPerformanceMode.value = shortcut.getExtra("lsfgPerformanceMode", "1") == "1"
+        state.lsfgHdrMode.value = shortcut.getExtra("lsfgHdrMode", "0") == "1"
+        when (shortcut.getExtra("lsfgPresentMode", "fifo").lowercase(Locale.ROOT)) {
+            "mailbox" -> state.lsfgSelectedPresentMode.intValue = 1
+            "immediate" -> state.lsfgSelectedPresentMode.intValue = 2
+            else -> state.lsfgSelectedPresentMode.intValue = 0
+        }
     }
 
     private fun loadResourceArrays() {
@@ -1040,6 +1076,32 @@ class ShortcutSettingsComposeDialog private constructor(
             hasContainerOverride =
                 hasContainerOverride or saveOverride("envVars", envVarsStr, container.getEnvVars())
 
+            // LSFG is a per-shortcut feature, not a container default.
+            shortcut.putExtra("lsfgEnabled", if (state.lsfgEnabled.value) "1" else null)
+            val lsfgDllPath = state.lsfgDllPath.value
+            shortcut.putExtra("lsfgDllPath", lsfgDllPath.ifBlank { null })
+            shortcut.putExtra(
+                "lsfgMultiplier",
+                ((state.lsfgSelectedMultiplier.intValue + 2).coerceIn(2, 4)).toString()
+            )
+            shortcut.putExtra(
+                "lsfgFlowScale",
+                String.format(Locale.US, "%.2f", state.lsfgFlowScale.intValue.coerceIn(25, 100) / 100f)
+            )
+            shortcut.putExtra("lsfgPerformanceMode", if (state.lsfgPerformanceMode.value) "1" else "0")
+            shortcut.putExtra("lsfgHdrMode", if (state.lsfgHdrMode.value) "1" else "0")
+            val lsfgPresentMode = when (state.lsfgSelectedPresentMode.intValue) {
+                1 -> "mailbox"
+                2 -> "immediate"
+                else -> "fifo"
+            }
+            shortcut.putExtra("lsfgPresentMode", lsfgPresentMode)
+            if (lsfgDllPath != originalLsfgDllPath) {
+                clearManagedLsfgDll(originalLsfgDllPath)
+                originalLsfgDllPath = lsfgDllPath
+            }
+            pendingLsfgDllPath = ""
+
             // FEXCore
             val fexcoreVersionEntries = state.fexcoreVersionEntries.value
             val fexcoreVersionIdx = state.selectedFexcoreVersion.intValue
@@ -1447,6 +1509,59 @@ class ShortcutSettingsComposeDialog private constructor(
         shortcut.saveData()
         shouldRefreshLibraryOnSave = true
         syncLibraryArtworkState()
+    }
+
+    private fun importLsfgDll(uri: Uri) {
+        val path = FileUtils.getFilePathFromUri(context, uri)
+        val fileName = FileUtils.getUriFileName(context, uri) ?: "Lossless.dll"
+        val isDll = path?.lowercase(Locale.ROOT)?.endsWith(".dll") == true ||
+            fileName.lowercase(Locale.ROOT).endsWith(".dll")
+        if (!isDll) {
+            AppUtils.showToast(context, R.string.settings_lsfg_select_valid_dll, Toast.LENGTH_SHORT)
+            return
+        }
+
+        val lsfgDir = File(context.filesDir, "lsfg")
+        if (!lsfgDir.exists()) lsfgDir.mkdirs()
+        val shortcutToken = shortcut.getExtra("uuid").ifBlank { shortcut.file.nameWithoutExtension }
+            .replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val safeFileName = fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val outputFile = File(lsfgDir, "$shortcutToken-${System.currentTimeMillis()}-$safeFileName")
+
+        if (!FileUtils.copy(context, uri, outputFile)) {
+            AppUtils.showToast(context, R.string.settings_lsfg_import_failed, Toast.LENGTH_SHORT)
+            return
+        }
+
+        if (pendingLsfgDllPath.isNotBlank() && pendingLsfgDllPath != originalLsfgDllPath) {
+            clearManagedLsfgDll(pendingLsfgDllPath)
+        }
+        pendingLsfgDllPath = outputFile.absolutePath
+        state.lsfgDllPath.value = pendingLsfgDllPath
+    }
+
+    private fun clearLsfgDll() {
+        if (state.lsfgDllPath.value == pendingLsfgDllPath) {
+            clearManagedLsfgDll(pendingLsfgDllPath)
+            pendingLsfgDllPath = ""
+        }
+        state.lsfgDllPath.value = ""
+    }
+
+    private fun discardPendingLsfgDllImport() {
+        if (pendingLsfgDllPath.isNotBlank() && pendingLsfgDllPath != originalLsfgDllPath) {
+            clearManagedLsfgDll(pendingLsfgDllPath)
+            pendingLsfgDllPath = ""
+        }
+    }
+
+    private fun clearManagedLsfgDll(path: String) {
+        if (path.isBlank()) return
+        val file = File(path)
+        val lsfgDir = File(context.filesDir, "lsfg")
+        if (file.parentFile?.absolutePath == lsfgDir.absolutePath && file.exists()) {
+            file.delete()
+        }
     }
 
     private fun getLibraryArtworkExtraKey(target: LibraryArtworkTarget): String? =
