@@ -991,11 +991,18 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             } else if ("CUSTOM".equals(gameSource)) {
                 String customMountPath = resolveCustomMountPath(shortcut);
                 if (!customMountPath.isEmpty() && new File(customMountPath).isDirectory()) {
-                    if (shortcut.getExtra("custom_game_folder").isEmpty() || shortcut.getExtra("game_install_path").isEmpty()) {
-                        if (shortcut.getExtra("custom_game_folder").isEmpty()) {
+                    String customGameFolder = shortcut.getExtra("custom_game_folder");
+                    String gameInstallPath = shortcut.getExtra("game_install_path");
+                    boolean customGameFolderMissing =
+                            customGameFolder.isEmpty() || !new File(customGameFolder).isDirectory();
+                    boolean gameInstallPathMissing =
+                            gameInstallPath.isEmpty() || !new File(gameInstallPath).isDirectory();
+
+                    if (customGameFolderMissing || gameInstallPathMissing) {
+                        if (customGameFolderMissing) {
                             shortcut.putExtra("custom_game_folder", customMountPath);
                         }
-                        if (shortcut.getExtra("game_install_path").isEmpty()) {
+                        if (gameInstallPathMissing) {
                             shortcut.putExtra("game_install_path", customMountPath);
                         }
                         shortcut.saveData();
@@ -1448,12 +1455,16 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         String customExe = shortcut.getExtra("custom_exe");
         if (customExe != null && !customExe.isEmpty()) {
             File customExeFile = new File(customExe);
+            String driveCPath = resolveCustomExecutableViaDriveC(shortcut, customExeFile);
+            if (!driveCPath.isEmpty()) return driveCPath;
             return WineUtils.hostPathToRootWinePath(container, customExeFile.getAbsolutePath());
         }
 
         String launchExePath = shortcut.getExtra("launch_exe_path");
         if (launchExePath != null && !launchExePath.isEmpty()) {
             File launchExeFile = new File(launchExePath);
+            String driveCPath = resolveCustomExecutableViaDriveC(shortcut, launchExeFile);
+            if (!driveCPath.isEmpty()) return driveCPath;
             return WineUtils.hostPathToRootWinePath(container, launchExeFile.getAbsolutePath());
         }
 
@@ -1471,6 +1482,26 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         return shortcut.path;
     }
 
+    private String resolveCustomExecutableViaDriveC(@NonNull Shortcut shortcut, @NonNull File exeFile) {
+        if (container == null || !exeFile.isFile()) return "";
+
+        String customGameFolder = resolveCustomMountPath(shortcut);
+        if (customGameFolder.isEmpty()) {
+            File parent = exeFile.getParentFile();
+            if (parent != null && parent.isDirectory()) {
+                customGameFolder = parent.getAbsolutePath();
+            }
+        }
+        if (customGameFolder.isEmpty()) return "";
+
+        String windowsPath = WineUtils.getDriveCGameWindowsPath(
+                container,
+                "CUSTOM",
+                customGameFolder,
+                exeFile.getAbsolutePath());
+        return windowsPath != null ? windowsPath : "";
+    }
+
     private String getActiveGameDirectoryPath() {
         if (shortcut == null) return null;
 
@@ -1482,7 +1513,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
         for (String candidatePath : candidatePaths) {
             if (candidatePath == null || candidatePath.isEmpty()) continue;
-            return new File(candidatePath).getAbsolutePath();
+            File candidateDir = new File(candidatePath);
+            if (candidateDir.isDirectory()) {
+                return candidateDir.getAbsolutePath();
+            }
         }
 
         return null;

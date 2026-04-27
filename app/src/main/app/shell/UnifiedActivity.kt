@@ -9259,7 +9259,14 @@ class UnifiedActivity :
         val windowsPath =
             container?.let {
                 com.winlator.cmod.runtime.wine.WineUtils
-                    .getWindowsPath(it, exeFile.absolutePath)
+                    .getDriveCGameWindowsPath(
+                        it,
+                        "CUSTOM",
+                        gameInstallPath,
+                        exeFile.absolutePath,
+                    )
+                    ?: com.winlator.cmod.runtime.wine.WineUtils
+                        .getWindowsPath(it, exeFile.absolutePath)
             } ?: run {
                 val relativePath =
                     try {
@@ -9267,7 +9274,7 @@ class UnifiedActivity :
                     } catch (_: Exception) {
                         exeFile.name
                     }
-                "F:\\$relativePath"
+                "C:\\WinNative\\Games\\CUSTOM\\${java.io.File(gameInstallPath).name}\\$relativePath"
             }
         return "wine \"$windowsPath\""
     }
