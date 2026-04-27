@@ -12,15 +12,23 @@ data class SaveFilePattern(
     val recursive: Int = 0,
 ) {
     val prefix: String
-        get() =
-            "%${root.name}%$path"
+        get() {
+            val pathForPrefix =
+                when {
+                    path.isBlank() || path == "." -> ""
+                    else -> path
+                }
+            return "%${root.name}%$pathForPrefix"
                 .replace("{64BitSteamID}", SteamUtils.getSteamId64().toString())
                 .replace("{Steam3AccountID}", SteamUtils.getSteam3AccountId().toString())
+        }
 
     val substitutedPath: String
         get() =
-            path
-                .replace("{64BitSteamID}", SteamUtils.getSteamId64().toString())
+            when {
+                path.isBlank() || path == "." -> ""
+                else -> path
+            }.replace("{64BitSteamID}", SteamUtils.getSteamId64().toString())
                 .replace("{Steam3AccountID}", SteamUtils.getSteam3AccountId().toString())
                 .replace("\\", File.separator)
 }

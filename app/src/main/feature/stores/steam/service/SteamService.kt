@@ -65,6 +65,7 @@ import com.winlator.cmod.feature.stores.steam.utils.Net
 import com.winlator.cmod.feature.stores.steam.utils.PrefManager
 import com.winlator.cmod.feature.stores.steam.utils.SteamUtils
 import com.winlator.cmod.feature.stores.steam.utils.generateSteamApp
+import com.winlator.cmod.feature.steamcloudsync.SteamAutoCloud
 import com.winlator.cmod.feature.sync.google.CloudSyncManager
 import com.winlator.cmod.runtime.container.Container
 import com.winlator.cmod.runtime.container.ContainerManager
@@ -4096,6 +4097,23 @@ class SteamService :
                 instance?.fileChangeListsDao?.getByAppId(appId)?.userFileInfo
             }
 
+        suspend fun getNewestRemoteCloudSaveTimestamp(appId: Int): Long? =
+            withContext(Dispatchers.IO) {
+                val steamInstance = instance ?: return@withContext null
+                val steamCloud = steamInstance._steamCloud ?: return@withContext null
+                try {
+                    steamCloud
+                        .getAppFileListChange(appId, 0)
+                        .await()
+                        .files
+                        .mapNotNull { file -> file.timestamp?.time?.takeIf { it > 0L } }
+                        .maxOrNull()
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to read newest remote Steam cloud timestamp for appId=$appId")
+                    null
+                }
+            }
+
         suspend fun forceSyncUserFiles(
             appId: Int,
             prefixToPath: (String) -> String,
@@ -4468,7 +4486,7 @@ class SteamService :
                                         appId = appId,
                                         clientId = clientId,
                                         uploadsCompleted = postSyncInfo?.uploadsCompleted == true,
-                                        uploadsRequired = postSyncInfo?.uploadsRequired == false,
+                                        uploadsRequired = postSyncInfo?.uploadsRequired == true,
                                     )
 
                                     if (syncResult == SyncResult.Success || syncResult == SyncResult.UpToDate) {
@@ -4638,12 +4656,6 @@ class SteamService :
                 }
             }
         }
-
-        data class FileChanges(
-            val filesDeleted: List<UserFileInfo>,
-            val filesModified: List<UserFileInfo>,
-            val filesCreated: List<UserFileInfo>,
-        )
 
         /**
          * loginusers.vdf writer for the OAuth-style refresh-token flow introduced in 2024.

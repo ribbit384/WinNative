@@ -3,11 +3,8 @@ import android.content.Context
 import com.winlator.cmod.feature.stores.epic.service.EpicCloudSavesManager
 import com.winlator.cmod.feature.stores.gog.service.GOGCloudSavesManager
 import com.winlator.cmod.feature.stores.gog.service.GOGService
-import com.winlator.cmod.feature.stores.steam.enums.PathType
-import com.winlator.cmod.feature.stores.steam.enums.SaveLocation
-import com.winlator.cmod.feature.stores.steam.enums.SyncResult
-import com.winlator.cmod.feature.stores.steam.service.SteamService
-import com.winlator.cmod.feature.stores.steam.utils.PrefManager
+import com.winlator.cmod.feature.steamcloudsync.CloudSyncConflictTimestamps
+import com.winlator.cmod.feature.steamcloudsync.SteamCloudSyncHelper
 import com.winlator.cmod.feature.sync.google.GameSaveBackupManager
 import com.winlator.cmod.runtime.container.Shortcut
 import kotlinx.coroutines.runBlocking
@@ -35,7 +32,7 @@ object CloudSyncHelper {
         val result =
             runBlocking {
                 when (shortcut.getExtra("game_source")) {
-                    "STEAM" -> forceSteamDownload(context, shortcut)
+                    "STEAM" -> SteamCloudSyncHelper.forceDownload(context, shortcut)
                     "GOG" -> forceGogDownload(context, shortcut)
                     "EPIC" -> forceEpicDownload(context, shortcut)
                     else -> false
@@ -55,42 +52,6 @@ object CloudSyncHelper {
         )
         return result
     }
-
-    private suspend fun forceSteamDownload(
-        context: Context,
-        shortcut: Shortcut,
-    ): Boolean {
-        val appId = shortcut.getExtra("app_id").toIntOrNull() ?: return false
-        return forceSteamDownloadById(context, appId)
-    }
-
-    private suspend fun forceSteamDownloadById(
-        context: Context,
-        appId: Int,
-    ): Boolean =
-        try {
-            val accountId =
-                SteamService.userSteamId?.accountID?.toLong()
-                    ?: PrefManager.steamUserAccountId.takeIf { it != 0 }?.toLong()
-                    ?: 0L
-            val prefixToPath: (String) -> String = { prefix ->
-                PathType.from(prefix).toAbsPath(context, appId, accountId)
-            }
-
-            val syncInfo =
-                SteamService
-                    .forceSyncUserFiles(
-                        appId = appId,
-                        prefixToPath = prefixToPath,
-                        preferredSave = SaveLocation.Remote,
-                        overrideLocalChangeNumber = -1,
-                    ).await()
-
-            syncInfo?.syncResult == SyncResult.Success
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to force Steam cloud download for appId=%d", appId)
-            false
-        }
 
     private suspend fun forceGogDownload(
         context: Context,
@@ -167,7 +128,10 @@ object CloudSyncHelper {
         if (gameSource.isEmpty() || appId.isEmpty()) return false
 
         val prefs = context.getSharedPreferences("cloud_sync_state", Context.MODE_PRIVATE)
-        return prefs.contains("synced_${gameSource}_$appId")
+        if (prefs.contains("synced_${gameSource}_$appId")) return true
+
+        return gameSource == "STEAM" &&
+            SteamCloudSyncHelper.hasActualLocalSaves(context, appId.toIntOrNull() ?: return false)
     }
 
     /**
@@ -210,11 +174,7 @@ object CloudSyncHelper {
             try {
                 when (shortcut.getExtra("game_source")) {
                     "STEAM" -> {
-                        val appId =
-                            shortcut.getExtra("app_id").toIntOrNull()
-                                ?: return@runBlocking false
-                        // Returns null when service is unavailable → treat as "can't tell"
-                        SteamService.cloudSavesDiffer(appId) ?: true
+                        SteamCloudSyncHelper.cloudSavesDiffer(context, shortcut)
                     }
 
                     "EPIC" -> {
@@ -294,15 +254,7 @@ object CloudSyncHelper {
                     }
 
                     "STEAM" -> {
-                        val appId = shortcut.getExtra("app_id").toIntOrNull()
-                        val localTracked =
-                            appId
-                                ?.let { SteamService.getTrackedCloudSaveFiles(it) }
-                                ?.maxOfOrNull { it.timestamp }
-                        CloudSyncConflictTimestamps(
-                            localTimestampLabel = formatTimestamp(localTracked),
-                            cloudTimestampLabel = "Unknown",
-                        )
+                        SteamCloudSyncHelper.getConflictTimestamps(context, shortcut)
                     }
 
                     else -> {
@@ -327,7 +279,7 @@ object CloudSyncHelper {
         val result =
             runBlocking {
                 when (shortcut.getExtra("game_source")) {
-                    "STEAM" -> forceSteamDownload(context, shortcut)
+                    "STEAM" -> SteamCloudSyncHelper.forceDownload(context, shortcut)
                     "GOG" -> forceGogDownload(context, shortcut)
                     "EPIC" -> forceEpicDownload(context, shortcut)
                     else -> false
@@ -360,8 +312,7 @@ object CloudSyncHelper {
             runBlocking {
                 when (source) {
                     GameSaveBackupManager.GameSource.STEAM -> {
-                        val appId = gameId.toIntOrNull() ?: return@runBlocking false
-                        forceSteamDownloadById(context, appId)
+                        SteamCloudSyncHelper.forceDownloadById(context, gameId.toIntOrNull() ?: return@runBlocking false)
                     }
                     GameSaveBackupManager.GameSource.EPIC -> {
                         val appId = gameId.toIntOrNull() ?: return@runBlocking false

@@ -137,6 +137,9 @@ enum class PathType {
                 else -> false
             }
 
+    val isSupportedSteamCloudRoot: Boolean
+        get() = isWindows || this == Root
+
     companion object {
         val DEFAULT = SteamUserData
 
@@ -286,8 +289,8 @@ enum class PathType {
                     MacAppSupport
                 }
 
-                "%ROOT_MOD%",
-                "ROOT_MOD",
+                "%root_mod%",
+                "root_mod",
                 -> {
                     Root
                 }
