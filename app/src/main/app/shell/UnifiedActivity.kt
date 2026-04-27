@@ -7979,7 +7979,8 @@ class UnifiedActivity :
         val scope = rememberCoroutineScope()
         val context = LocalContext.current
         var historyRefreshKey by remember { mutableStateOf(0) }
-        var historyLoading by remember { mutableStateOf(true) }
+        var historyRequested by remember { mutableStateOf(false) }
+        var historyLoading by remember { mutableStateOf(false) }
         var historyEntries by remember { mutableStateOf<List<GameSaveBackupManager.BackupHistoryEntry>>(emptyList()) }
         var entryPendingRestore by remember {
             mutableStateOf<GameSaveBackupManager.BackupHistoryEntry?>(null)
@@ -7992,6 +7993,7 @@ class UnifiedActivity :
         }
 
         LaunchedEffect(gameSource, gameId, historyRefreshKey) {
+            if (!historyRequested) return@LaunchedEffect
             historyLoading = true
             historyEntries =
                 GameSaveBackupManager.listBackupHistory(
@@ -8006,7 +8008,7 @@ class UnifiedActivity :
         // Auto-refresh the history list whenever a backup/restore finishes.
         var wasWorking by remember { mutableStateOf(false) }
         LaunchedEffect(isWorking) {
-            if (wasWorking && !isWorking) historyRefreshKey++
+            if (wasWorking && !isWorking && historyRequested) historyRefreshKey++
             wasWorking = isWorking
         }
 
@@ -8076,7 +8078,10 @@ class UnifiedActivity :
             SaveHistorySection(
                 loading = historyLoading,
                 entries = historyEntries,
-                onRefresh = { historyRefreshKey++ },
+                onRefresh = {
+                    historyRequested = true
+                    historyRefreshKey++
+                },
                 onRestore = { entry -> entryPendingRestore = entry },
                 onRename = { entry -> entryPendingRename = entry },
                 onDelete = { entry -> entryPendingDelete = entry },

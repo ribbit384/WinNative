@@ -5,8 +5,6 @@ import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.AuthorizationResult
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.Scope
-import com.google.android.gms.games.PlayGames
-import com.google.android.gms.tasks.Tasks
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import com.winlator.cmod.feature.stores.epic.service.EpicCloudSavesManager
@@ -16,7 +14,6 @@ import com.winlator.cmod.feature.stores.steam.service.SteamService
 import com.winlator.cmod.feature.stores.steam.utils.PrefManager
 import com.winlator.cmod.shared.android.ActivityResultHost
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -37,7 +34,6 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -60,10 +56,8 @@ object GameSaveBackupManager {
     private const val DRIVE_HISTORY_FOLDER_NAME = "History"
     private const val DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
     private const val PREFS_NAME = "google_store_login_sync"
-    private const val KEY_GOOGLE_SYNC_ENABLED = "google_sync_enabled"
+    private const val KEY_GOOGLE_DRIVE_CONNECTED = "google_drive_connected"
     private const val KEY_KEEP_REPLACED_BACKUP = "cloud_sync_keep_replaced_backup"
-    private const val AUTH_SESSION_RETRY_COUNT = 5
-    private const val AUTH_SESSION_RETRY_DELAY_MS = 750L
 
     /** Maximum number of history entries retained (and shown) per game. */
     const val MAX_HISTORY_ENTRIES = 30
@@ -146,7 +140,7 @@ object GameSaveBackupManager {
         gameSource: GameSource,
         gameId: String,
         gameName: String,
-    ): BackupResult = backupDiscardedSave(activity, gameSource, gameId, gameName, BackupOrigin.MANUAL)
+    ): BackupResult = backupDiscardedSave(activity, gameSource, gameId, gameName, BackupOrigin.MANUAL, GoogleAuthMode.INTERACTIVE)
 
     /**
      * Exit auto-backup: zips local saves and writes them to Save History with
@@ -159,16 +153,18 @@ object GameSaveBackupManager {
         gameName: String,
     ): BackupResult {
         val context = activity.applicationContext
-        if (!isGoogleSyncEnabled(context)) {
-            return BackupResult(false, "Google sync is not enabled.")
+        if (!isDriveConnected(context)) {
+            return BackupResult(false, "Google Drive is not connected.")
         }
         if (!isAutoBackupEnabled(context)) {
             return BackupResult(false, "Auto backup is not enabled.")
         }
-        return backupDiscardedSave(activity, gameSource, gameId, gameName, BackupOrigin.AUTO)
+        return backupDiscardedSave(activity, gameSource, gameId, gameName, BackupOrigin.AUTO, GoogleAuthMode.SILENT)
     }
 
     fun isAutoBackupEnabled(context: Context): Boolean = prefs(context).getBoolean("cloud_sync_auto_backup", false)
+
+    fun isDriveConnected(context: Context): Boolean = prefs(context).getBoolean(KEY_GOOGLE_DRIVE_CONNECTED, false)
 
     /**
      * Triggers the Google Drive account selection / authorization consent flow.
@@ -177,7 +173,10 @@ object GameSaveBackupManager {
      */
     suspend fun requestDriveAuthorization(activity: Activity): Boolean =
         withContext(Dispatchers.IO) {
-            val token = getDriveAccessToken(activity)
+            val token = getDriveAccessToken(activity, GoogleAuthMode.INTERACTIVE)
+            if (token != null) {
+                setDriveConnected(activity, true)
+            }
             token != null
         }
 
@@ -218,6 +217,7 @@ object GameSaveBackupManager {
         resultCode: Int,
     ) {
         if (resultCode == Activity.RESULT_OK) {
+            setDriveConnected(activity, true)
             Timber.tag(TAG).i("Drive authorization consent granted")
         } else {
             Timber.tag(TAG).w("Drive authorization consent denied (resultCode=%d)", resultCode)
@@ -251,18 +251,16 @@ object GameSaveBackupManager {
         gameId: String,
         gameName: String,
         origin: BackupOrigin,
+        authMode: GoogleAuthMode = GoogleAuthMode.INTERACTIVE,
     ): BackupResult =
         withContext(Dispatchers.IO) {
             try {
                 val context = activity.applicationContext
-                if (!isGoogleSyncEnabled(context)) {
-                    return@withContext BackupResult(false, "Google sync is not enabled.")
-                }
-                if (!awaitAuthenticatedSession(activity)) {
-                    return@withContext BackupResult(false, "Not signed in to Google Play Games.")
+                if (authMode == GoogleAuthMode.SILENT && !isDriveConnected(context)) {
+                    return@withContext BackupResult(false, "Google Drive is not connected.")
                 }
                 val accessToken =
-                    getDriveAccessToken(activity)
+                    getDriveAccessToken(activity, authMode)
                         ?: return@withContext BackupResult(false, "Google Drive authorization required.")
 
                 val saveSources = getLocalSaveSources(context, gameSource, gameId, forRestore = false)
@@ -309,9 +307,8 @@ object GameSaveBackupManager {
         withContext(Dispatchers.IO) {
             try {
                 val context = activity.applicationContext
-                if (!isGoogleSyncEnabled(context)) return@withContext emptyList()
-                if (!awaitAuthenticatedSession(activity)) return@withContext emptyList()
-                val accessToken = getDriveAccessToken(activity) ?: return@withContext emptyList()
+                if (!isDriveConnected(context)) return@withContext emptyList()
+                val accessToken = getDriveAccessToken(activity, GoogleAuthMode.SILENT) ?: return@withContext emptyList()
 
                 val folderId =
                     findHistoryGameFolder(accessToken, gameSource, gameId, gameName)
@@ -363,14 +360,8 @@ object GameSaveBackupManager {
         withContext(Dispatchers.IO) {
             try {
                 val context = activity.applicationContext
-                if (!isGoogleSyncEnabled(context)) {
-                    return@withContext BackupResult(false, "Google sync is not enabled.")
-                }
-                if (!awaitAuthenticatedSession(activity)) {
-                    return@withContext BackupResult(false, "Not signed in to Google Play Games.")
-                }
                 val accessToken =
-                    getDriveAccessToken(activity)
+                    getDriveAccessToken(activity, GoogleAuthMode.INTERACTIVE)
                         ?: return@withContext BackupResult(false, "Google Drive authorization required.")
 
                 val zipBytes = downloadDriveFile(accessToken, entry.fileId)
@@ -406,14 +397,8 @@ object GameSaveBackupManager {
         withContext(Dispatchers.IO) {
             try {
                 val context = activity.applicationContext
-                if (!isGoogleSyncEnabled(context)) {
-                    return@withContext BackupResult(false, "Google sync is not enabled.")
-                }
-                if (!awaitAuthenticatedSession(activity)) {
-                    return@withContext BackupResult(false, "Not signed in to Google Play Games.")
-                }
                 val accessToken =
-                    getDriveAccessToken(activity)
+                    getDriveAccessToken(activity, GoogleAuthMode.INTERACTIVE)
                         ?: return@withContext BackupResult(false, "Google Drive authorization required.")
 
                 val cleanLabel = sanitizeHistoryLabel(newLabel)
@@ -441,14 +426,8 @@ object GameSaveBackupManager {
         withContext(Dispatchers.IO) {
             try {
                 val context = activity.applicationContext
-                if (!isGoogleSyncEnabled(context)) {
-                    return@withContext BackupResult(false, "Google sync is not enabled.")
-                }
-                if (!awaitAuthenticatedSession(activity)) {
-                    return@withContext BackupResult(false, "Not signed in to Google Play Games.")
-                }
                 val accessToken =
-                    getDriveAccessToken(activity)
+                    getDriveAccessToken(activity, GoogleAuthMode.INTERACTIVE)
                         ?: return@withContext BackupResult(false, "Google Drive authorization required.")
 
                 val ok = deleteDriveFile(accessToken, entry.fileId)
@@ -839,9 +818,14 @@ object GameSaveBackupManager {
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    private fun isGoogleSyncEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_GOOGLE_SYNC_ENABLED, false)
+    private fun setDriveConnected(
+        context: Context,
+        connected: Boolean,
+    ) {
+        prefs(context.applicationContext).edit().putBoolean(KEY_GOOGLE_DRIVE_CONNECTED, connected).apply()
+    }
 
-    private fun isActivityValidForPlayGames(activity: Activity): Boolean {
+    private fun isActivityValidForDriveAuth(activity: Activity): Boolean {
         if (activity.isFinishing || activity.isDestroyed) {
             return false
         }
@@ -849,58 +833,18 @@ object GameSaveBackupManager {
         return lifecycleState?.isAtLeast(Lifecycle.State.STARTED) ?: true
     }
 
-    private suspend fun isAuthenticatedBlocking(activity: Activity): Boolean {
-        if (!isActivityValidForPlayGames(activity)) {
-            Timber.tag(TAG).i(
-                "Skipping Google auth check because %s is finishing or destroyed",
-                activity::class.java.simpleName,
-            )
-            return false
-        }
-        return try {
-            PlayGamesBootstrap.ensureInitialized(activity)
-            val task = PlayGames.getGamesSignInClient(activity).isAuthenticated
-            val result =
-                withContext(Dispatchers.IO) {
-                    try {
-                        Tasks.await(task, 10, TimeUnit.SECONDS)
-                    } catch (e: TimeoutException) {
-                        Timber.tag(TAG).e("Timeout waiting for Google authentication state")
-                        null
-                    }
-                }
-            result?.isAuthenticated == true
-        } catch (error: Exception) {
-            Timber.tag(TAG).e(error, "Failed to read Google authentication state")
-            false
-        }
-    }
-
-    private suspend fun awaitAuthenticatedSession(activity: Activity): Boolean {
-        if (!isActivityValidForPlayGames(activity)) {
-            return false
-        }
-        PlayGamesBootstrap.ensureInitialized(activity)
-        repeat(AUTH_SESSION_RETRY_COUNT) { attempt ->
-            if (isAuthenticatedBlocking(activity)) {
-                return true
-            }
-            if (attempt < AUTH_SESSION_RETRY_COUNT - 1) {
-                delay(AUTH_SESSION_RETRY_DELAY_MS)
-            }
-        }
-        return false
-    }
-
     /**
      * Get an OAuth2 access token with Drive.file scope using AuthorizationClient.
-     * If the user hasn't granted Drive access yet, launches the consent UI and returns null
-     * (the caller should retry after consent is granted).
+     * Interactive callers may launch consent UI; silent callers only observe whether
+     * access is already available.
      */
-    private suspend fun getDriveAccessToken(activity: Activity): String? =
+    private suspend fun getDriveAccessToken(
+        activity: Activity,
+        authMode: GoogleAuthMode,
+    ): String? =
         withContext(Dispatchers.IO) {
             try {
-                if (!isActivityValidForPlayGames(activity)) {
+                if (!isActivityValidForDriveAuth(activity)) {
                     Timber.tag(TAG).w(
                         "Skipping Drive authorization because %s is no longer active",
                         activity::class.java.simpleName,
@@ -927,7 +871,11 @@ object GameSaveBackupManager {
                     } ?: return@withContext null
 
                 if (authResult.hasResolution()) {
-                    // User needs to grant consent — launch the consent UI
+                    if (authMode == GoogleAuthMode.SILENT) {
+                        Timber.tag(TAG).i("Drive authorization requires consent; silent caller skipped UI")
+                        return@withContext null
+                    }
+
                     Timber.tag(TAG).i("Drive authorization requires user consent, launching...")
                     val pendingIntent = authResult.pendingIntent
                     if (pendingIntent != null) {
@@ -948,6 +896,7 @@ object GameSaveBackupManager {
 
                 val token = authResult.accessToken
                 if (token != null) {
+                    setDriveConnected(activity, true)
                     Timber.tag(TAG).i("Got Drive access token via AuthorizationClient")
                 } else {
                     Timber.tag(TAG).e("AuthorizationResult has no access token")
