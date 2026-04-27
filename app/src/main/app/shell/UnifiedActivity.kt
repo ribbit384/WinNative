@@ -11,6 +11,7 @@ import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.util.Log
 import androidx.activity.SystemBarStyle
@@ -53,6 +54,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.rememberScrollableState
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -81,6 +85,9 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -256,6 +263,9 @@ private val TabGridTopPadding = 8.dp
 private val TabCarouselTopPadding = 12.dp
 private val TabCarouselBottomPadding = 20.dp
 private val DownloadsHeaderTopPadding = 2.dp
+private const val LIBRARY_PULL_REFRESH_COOLDOWN_MS = 2_000L
+private const val LIBRARY_PULL_REFRESH_MIN_INDICATOR_MS = 1_500L
+private val LibraryPullRefreshIndicatorSize = 48.dp
 
 private fun Modifier.tabScreenPadding(
     top: Dp = 0.dp,
@@ -1096,6 +1106,44 @@ class UnifiedActivity :
         return installStateMap
     }
 
+    private suspend fun refreshCustomLibraryShortcuts(context: android.content.Context) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                ContainerManager(context).apply {
+                    upgradeShortcuts {}
+                    loadShortcuts()
+                }
+            }.onFailure {
+                Log.w("UnifiedActivity", "Custom library shortcut refresh failed", it)
+            }
+        }
+    }
+
+    private suspend fun refreshLibrarySources(context: android.content.Context) {
+        refreshCustomLibraryShortcuts(context)
+
+        if (SteamService.hasStoredCredentials(context)) {
+            if (!SteamService.isRunning) {
+                SteamService.start(context)
+                delay(750)
+            }
+            withContext(Dispatchers.IO) {
+                runCatching { SteamService.refreshOwnedGamesFromServer() }
+                    .onFailure { Log.w("UnifiedActivity", "Steam library refresh failed", it) }
+            }
+        }
+
+        if (EpicService.hasStoredCredentials(context)) {
+            runCatching { EpicService.triggerLibrarySync(context) }
+                .onFailure { Log.w("UnifiedActivity", "Epic library refresh failed to start", it) }
+        }
+
+        if (GOGService.hasStoredCredentials(context)) {
+            runCatching { GOGService.triggerLibrarySync(context) }
+                .onFailure { Log.w("UnifiedActivity", "GOG library refresh failed to start", it) }
+        }
+    }
+
     // Main scaffold
     @Composable
     fun UnifiedHub() {
@@ -1157,6 +1205,32 @@ class UnifiedActivity :
         val persona by SteamService.instance?.localPersona?.collectAsState()
             ?: remember { mutableStateOf(null) }
         val scope = rememberCoroutineScope()
+        var libraryRefreshInProgress by remember { mutableStateOf(false) }
+        var lastLibraryRefreshElapsed by remember { mutableLongStateOf(0L) }
+        val refreshLibrary: () -> Unit = {
+            val now = SystemClock.elapsedRealtime()
+            if (!libraryRefreshInProgress && now - lastLibraryRefreshElapsed >= LIBRARY_PULL_REFRESH_COOLDOWN_MS) {
+                scope.launch {
+                    val refreshStartedAt = SystemClock.elapsedRealtime()
+                    lastLibraryRefreshElapsed = refreshStartedAt
+                    libraryRefreshInProgress = true
+                    try {
+                        refreshLibrarySources(context)
+                    } finally {
+                        val remainingIndicatorTime =
+                            LIBRARY_PULL_REFRESH_MIN_INDICATOR_MS - (SystemClock.elapsedRealtime() - refreshStartedAt)
+                        if (remainingIndicatorTime > 0L) {
+                            delay(remainingIndicatorTime)
+                        }
+                        localLibraryRefreshKey++
+                        shortcutDataRefreshKey++
+                        iconRefreshKey++
+                        this@UnifiedActivity.libraryPlaytimeRefreshSignal++
+                        libraryRefreshInProgress = false
+                    }
+                }
+            }
+        }
 
         // Collect Epic/GOG apps from DB flows (Room flows auto-update on data changes)
         val epicApps by db.epicGameDao().getAll().collectAsState(initial = emptyList())
@@ -1518,6 +1592,8 @@ class UnifiedActivity :
                                 iconRefreshKey = iconRefreshKey,
                                 searchQuery = searchQuery,
                                 isControllerConnected = isControllerConnected,
+                                isRefreshingLibrary = libraryRefreshInProgress,
+                                onRefreshLibrary = refreshLibrary,
                             )
                         }
 
@@ -2066,6 +2142,7 @@ class UnifiedActivity :
     }
 
     // PS5-style Library Carousel
+    @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun LibraryCarousel(
         isLoggedIn: Boolean,
@@ -2079,6 +2156,8 @@ class UnifiedActivity :
         iconRefreshKey: Int = 0,
         searchQuery: String = "",
         isControllerConnected: Boolean = false,
+        isRefreshingLibrary: Boolean = false,
+        onRefreshLibrary: () -> Unit = {},
     ) {
         val context = LocalContext.current
 
@@ -2560,133 +2639,156 @@ class UnifiedActivity :
             }
         }
 
-        when (layoutMode) {
-            LibraryLayoutMode.GRID_4 -> {
-                FourByTwoGridView(
-                    items = displayedApps,
-                    modifier = Modifier.tabScreenPadding(),
-                    gridState = gridState,
-                    contentPadding = TabGridContentPadding,
-                    clipContent = false,
-                    keyOf = { it.id },
-                ) { app, index, rowHeight ->
-                    GameCapsule(
-                        app = app,
-                        gogGame = visibleGogByPseudoId[app.id],
-                        epicGame = visibleEpicByPseudoId[app.id],
-                        iconRefreshKey = iconRefreshKey,
-                        isFocusedOverride = index == focusIndex,
-                        isControllerActive = isControllerConnected,
-                        customArtworkPath = visibleCustomGridArtworkPathByAppId[app.id] ?: visibleCustomArtworkPathByAppId[app.id],
-                        customIconPath = visibleCustomIconPathByAppId[app.id],
-                        onClick = {
-                            detailGogGame = visibleGogByPseudoId[app.id]
-                            detailApp = app
-                        },
-                        onLongClick = {
-                            openSettingsForApp(index, app)
-                        },
-                        modifier =
-                            Modifier
-                                .height(rowHeight)
-                                .then(
-                                    if (index in focusRequesters.indices) {
-                                        Modifier.focusRequester(focusRequesters[index])
-                                    } else {
-                                        Modifier
-                                    },
-                                ),
-                    )
-                }
-            }
-
-            LibraryLayoutMode.CAROUSEL -> {
-                CarouselView(
-                    items = displayedApps,
-                    modifier = Modifier.tabScreenPadding(top = TabCarouselTopPadding, bottom = TabCarouselBottomPadding),
-                    listState = carouselState,
-                    selectedIndex = focusIndex,
-                    onCenteredIndexChanged = { centeredIndex ->
-                        if (activity != null && activity.libraryFocusIndex.value != centeredIndex) {
-                            activity.libraryFocusIndex.value = centeredIndex
-                        }
-                    },
-                ) { app, index, isSelected, cardWidth, cardHeight ->
-                    GameCapsule(
-                        app = app,
-                        gogGame = visibleGogByPseudoId[app.id],
-                        epicGame = visibleEpicByPseudoId[app.id],
-                        iconRefreshKey = iconRefreshKey,
-                        isFocusedOverride = isSelected,
-                        isControllerActive = isControllerConnected,
-                        customArtworkPath = visibleCustomCarouselArtworkPathByAppId[app.id] ?: visibleCustomArtworkPathByAppId[app.id],
-                        customIconPath = visibleCustomIconPathByAppId[app.id],
-                        onClick = {
-                            detailGogGame = visibleGogByPseudoId[app.id]
-                            detailApp = app
-                        },
-                        onLongClick = { openSettingsForApp(index, app) },
-                        useLibraryCapsule = true,
-                        modifier =
-                            Modifier
-                                .fillMaxSize()
-                                .then(
-                                    if (index in focusRequesters.indices) {
-                                        Modifier.focusRequester(focusRequesters[index])
-                                    } else {
-                                        Modifier
-                                    },
-                                ),
-                    )
-                }
-            }
-
-            LibraryLayoutMode.LIST -> {
-                val listViewState = rememberLazyListState()
-                ListView(
-                    items = displayedApps,
-                    modifier = Modifier.tabScreenPadding(),
-                    listState = listViewState,
-                    contentPadding = TabListContentPadding,
-                    selectedIndex = focusIndex,
-                    onSelectedIndexChanged = { newIdx ->
-                        activity?.libraryFocusIndex?.value = newIdx
-                    },
-                    keyOf = { it.id },
-                ) { app, index, isSelected ->
-                    GameCapsule(
-                        app = app,
-                        gogGame = visibleGogByPseudoId[app.id],
-                        epicGame = visibleEpicByPseudoId[app.id],
-                        iconRefreshKey = iconRefreshKey,
-                        isFocusedOverride = isSelected,
-                        isControllerActive = isControllerConnected,
-                        customArtworkPath = visibleCustomListArtworkPathByAppId[app.id] ?: visibleCustomArtworkPathByAppId[app.id],
-                        customIconPath = visibleCustomIconPathByAppId[app.id],
-                        onClick = {
-                            detailGogGame = visibleGogByPseudoId[app.id]
-                            detailApp = app
-                        },
-                        onLongClick = { openSettingsForApp(index, app) },
-                        listMode = true,
-                        modifier =
-                            Modifier
-                                .then(
-                                    if (index in focusRequesters.indices) {
-                                        Modifier.focusRequester(focusRequesters[index])
-                                    } else {
-                                        Modifier
-                                    },
-                                ),
-                    )
-                }
-                JoystickListScroll(
-                    listState = listViewState,
-                    stickFlow = activity?.rightStickScrollState,
-                    minSpeed = 2.5f,
-                    maxSpeed = 16f,
-                    quadratic = true,
+        val pullRefreshState = rememberPullToRefreshState()
+        PullToRefreshBox(
+            isRefreshing = isRefreshingLibrary,
+            onRefresh = onRefreshLibrary,
+            modifier = Modifier.fillMaxSize(),
+            state = pullRefreshState,
+            indicator = {
+                PullToRefreshDefaults.Indicator(
+                    state = pullRefreshState,
+                    isRefreshing = isRefreshingLibrary,
+                    modifier = Modifier.align(Alignment.TopCenter).size(LibraryPullRefreshIndicatorSize),
                 )
+            },
+        ) {
+            when (layoutMode) {
+                LibraryLayoutMode.GRID_4 -> {
+                    FourByTwoGridView(
+                        items = displayedApps,
+                        modifier = Modifier.tabScreenPadding(),
+                        gridState = gridState,
+                        contentPadding = TabGridContentPadding,
+                        clipContent = false,
+                        keyOf = { it.id },
+                    ) { app, index, rowHeight ->
+                        GameCapsule(
+                            app = app,
+                            gogGame = visibleGogByPseudoId[app.id],
+                            epicGame = visibleEpicByPseudoId[app.id],
+                            iconRefreshKey = iconRefreshKey,
+                            isFocusedOverride = index == focusIndex,
+                            isControllerActive = isControllerConnected,
+                            customArtworkPath = visibleCustomGridArtworkPathByAppId[app.id] ?: visibleCustomArtworkPathByAppId[app.id],
+                            customIconPath = visibleCustomIconPathByAppId[app.id],
+                            onClick = {
+                                detailGogGame = visibleGogByPseudoId[app.id]
+                                detailApp = app
+                            },
+                            onLongClick = {
+                                openSettingsForApp(index, app)
+                            },
+                            modifier =
+                                Modifier
+                                    .height(rowHeight)
+                                    .then(
+                                        if (index in focusRequesters.indices) {
+                                            Modifier.focusRequester(focusRequesters[index])
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
+                        )
+                    }
+                }
+
+                LibraryLayoutMode.CAROUSEL -> {
+                    // Carousel scrolls horizontally, so expose a vertical scroll node for the shared pull gesture.
+                    val verticalPullProxy = rememberScrollableState { 0f }
+                    CarouselView(
+                        items = displayedApps,
+                        modifier =
+                            Modifier
+                                .tabScreenPadding(top = TabCarouselTopPadding, bottom = TabCarouselBottomPadding)
+                                .scrollable(
+                                    state = verticalPullProxy,
+                                    orientation = Orientation.Vertical,
+                                ),
+                        listState = carouselState,
+                        selectedIndex = focusIndex,
+                        onCenteredIndexChanged = { centeredIndex ->
+                            if (activity != null && activity.libraryFocusIndex.value != centeredIndex) {
+                                activity.libraryFocusIndex.value = centeredIndex
+                            }
+                        },
+                    ) { app, index, isSelected, cardWidth, cardHeight ->
+                        GameCapsule(
+                            app = app,
+                            gogGame = visibleGogByPseudoId[app.id],
+                            epicGame = visibleEpicByPseudoId[app.id],
+                            iconRefreshKey = iconRefreshKey,
+                            isFocusedOverride = isSelected,
+                            isControllerActive = isControllerConnected,
+                            customArtworkPath = visibleCustomCarouselArtworkPathByAppId[app.id] ?: visibleCustomArtworkPathByAppId[app.id],
+                            customIconPath = visibleCustomIconPathByAppId[app.id],
+                            onClick = {
+                                detailGogGame = visibleGogByPseudoId[app.id]
+                                detailApp = app
+                            },
+                            onLongClick = { openSettingsForApp(index, app) },
+                            useLibraryCapsule = true,
+                            modifier =
+                                Modifier
+                                    .fillMaxSize()
+                                    .then(
+                                        if (index in focusRequesters.indices) {
+                                            Modifier.focusRequester(focusRequesters[index])
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
+                        )
+                    }
+                }
+
+                LibraryLayoutMode.LIST -> {
+                    val listViewState = rememberLazyListState()
+                    ListView(
+                        items = displayedApps,
+                        modifier = Modifier.tabScreenPadding(),
+                        listState = listViewState,
+                        contentPadding = TabListContentPadding,
+                        selectedIndex = focusIndex,
+                        onSelectedIndexChanged = { newIdx ->
+                            activity?.libraryFocusIndex?.value = newIdx
+                        },
+                        keyOf = { it.id },
+                    ) { app, index, isSelected ->
+                        GameCapsule(
+                            app = app,
+                            gogGame = visibleGogByPseudoId[app.id],
+                            epicGame = visibleEpicByPseudoId[app.id],
+                            iconRefreshKey = iconRefreshKey,
+                            isFocusedOverride = isSelected,
+                            isControllerActive = isControllerConnected,
+                            customArtworkPath = visibleCustomListArtworkPathByAppId[app.id] ?: visibleCustomArtworkPathByAppId[app.id],
+                            customIconPath = visibleCustomIconPathByAppId[app.id],
+                            onClick = {
+                                detailGogGame = visibleGogByPseudoId[app.id]
+                                detailApp = app
+                            },
+                            onLongClick = { openSettingsForApp(index, app) },
+                            listMode = true,
+                            modifier =
+                                Modifier
+                                    .then(
+                                        if (index in focusRequesters.indices) {
+                                            Modifier.focusRequester(focusRequesters[index])
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
+                        )
+                    }
+                    JoystickListScroll(
+                        listState = listViewState,
+                        stickFlow = activity?.rightStickScrollState,
+                        minSpeed = 2.5f,
+                        maxSpeed = 16f,
+                        quadratic = true,
+                    )
+                }
             }
         }
 
