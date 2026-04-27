@@ -35,7 +35,6 @@ import com.winlator.cmod.feature.settings.GraphicsDriverConfigUtils
 import com.winlator.cmod.feature.settings.WineD3DConfigUtils
 import com.winlator.cmod.shared.android.AppUtils
 import com.winlator.cmod.shared.io.AssetPaths
-import com.winlator.cmod.runtime.wine.DefaultVersion
 import com.winlator.cmod.runtime.wine.EnvVars
 import com.winlator.cmod.runtime.wine.WineLocaleUtils
 import com.winlator.cmod.shared.io.FileUtils
@@ -311,7 +310,6 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             state.enableDInput.value = true
         }
 
-        state.showFPS.value = c?.isShowFPS() ?: false
         state.fullscreenStretched.value = c?.isFullscreenStretched() ?: false
 
         // Steam fields are shortcut-only in the UI; leave any existing steam
@@ -604,13 +602,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         var graphicsDriverConfig = buildGraphicsDriverConfigFromState()
         val parsedGfx = GraphicsDriverConfigUtils.parseGraphicsDriverConfig(graphicsDriverConfig)
         if (parsedGfx.get("version").isNullOrEmpty()) {
-            val defaultVersion = try {
-                if (com.winlator.cmod.runtime.system.GPUInformation.isDriverSupported(DefaultVersion.WRAPPER_ADRENO, context))
-                    DefaultVersion.WRAPPER_ADRENO else DefaultVersion.WRAPPER
-            } catch (e: Throwable) {
-                DefaultVersion.WRAPPER
-            }
-            parsedGfx.put("version", defaultVersion)
+            parsedGfx.put("version", "System")
             graphicsDriverConfig = GraphicsDriverConfigUtils.toGraphicsDriverConfig(parsedGfx)
         }
         val dxwrapper = getIdentifierFromEntries(
@@ -658,11 +650,11 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         val startupSelection = state.selectedStartupSelection.intValue.toByte()
 
         val box64VersionEntries = state.box64VersionEntries.value
-        val box64Version = box64VersionEntries.getOrElse(state.selectedBox64Version.intValue) { DefaultVersion.BOX64 }
+        val box64Version = box64VersionEntries.getOrElse(state.selectedBox64Version.intValue) { "" }
         val box64Preset = box64PresetIds.getOrElse(state.selectedBox64Preset.intValue) { Box64Preset.COMPATIBILITY }
 
         val fexcoreVersionEntries = state.fexcoreVersionEntries.value
-        val fexcoreVersion = fexcoreVersionEntries.getOrElse(state.selectedFexcoreVersion.intValue) { DefaultVersion.FEXCORE }
+        val fexcoreVersion = fexcoreVersionEntries.getOrElse(state.selectedFexcoreVersion.intValue) { "" }
         val fexcorePreset = fexcorePresetIds.getOrElse(state.selectedFexcorePreset.intValue) { FEXCorePreset.COMPATIBILITY }
 
         val desktopTheme = buildDesktopThemeString()
@@ -684,7 +676,6 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             c.setEmulator64(emulator64)
             c.setWinComponents(wincomponents)
             c.setDrives(drivesString)
-            c.setShowFPS(state.showFPS.value)
             c.setFullscreenStretched(state.fullscreenStretched.value)
             c.setInputType(finalInputType)
             c.setStartupSelection(startupSelection)
@@ -721,7 +712,6 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
                 data.put("emulator64", emulator64)
                 data.put("wincomponents", wincomponents)
                 data.put("drives", drivesString)
-                data.put("showFPS", state.showFPS.value)
                 data.put("fullscreenStretched", state.fullscreenStretched.value)
                 data.put("inputType", finalInputType)
                 data.put("startupSelection", startupSelection.toInt())
@@ -856,8 +846,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             if (firstDash >= 0) itemList.add(entryName.substring(firstDash + 1))
         }
         state.box64VersionEntries.value = itemList
-        val current = container?.getBox64Version()
-            ?: (if (isArm64EC) DefaultVersion.WOWBOX64 else DefaultVersion.BOX64)
+        val current = container?.getBox64Version() ?: ""
         selectByValue(itemList, current, state.selectedBox64Version)
         updateEmulatorFrameVisibility()
     }
@@ -871,7 +860,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             if (firstDash >= 0) items.add(entryName.substring(firstDash + 1))
         }
         state.fexcoreVersionEntries.value = items
-        val saved = container?.getFEXCoreVersion() ?: DefaultVersion.FEXCORE
+        val saved = container?.getFEXCoreVersion() ?: ""
         selectByValue(items, saved, state.selectedFexcoreVersion)
     }
 
@@ -1050,13 +1039,10 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         state.dxvkVkd3dFeatureLevelEntries.value = DXVKConfigUtils.VKD3D_FEATURE_LEVEL.toList()
         state.dxvkDdrawWrapperEntries.value =
             context.resources.getStringArray(R.array.ddrawrapper_entries).toList()
-        state.dxvkFramerateEntries.value =
-            context.resources.getStringArray(R.array.dxvk_framerate_entries).toList()
         loadDxvkVersions()
         loadVkd3dVersions()
         selectByIdentifier(state.dxvkVkd3dFeatureLevelEntries.value, config.get("vkd3dLevel"), state.dxvkSelectedVkd3dFeatureLevel)
         selectByIdentifier(state.dxvkDdrawWrapperEntries.value, config.get("ddrawrapper"), state.dxvkSelectedDdrawWrapper)
-        selectByIdentifier(state.dxvkFramerateEntries.value, config.get("framerate"), state.dxvkSelectedFramerate)
         state.dxvkAsync.value = config.get("async") == "1"
         state.dxvkAsyncCache.value = config.get("asyncCache") == "1"
     }
@@ -1140,10 +1126,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
     private fun buildDxvkConfigFromState(): String {
         val entries = state.dxvkVersionEntries.value
         val idx = state.dxvkSelectedVersion.intValue
-        val version = if (idx in entries.indices) entries[idx] else DefaultVersion.DXVK
-        val framerate = StringUtils.parseNumber(
-            state.dxvkFramerateEntries.value.getOrElse(state.dxvkSelectedFramerate.intValue) { "0" }
-        )
+        val version = if (idx in entries.indices) entries[idx] else ""
         val isGplAsync = version.contains("gplasync")
         val isAsync = version.contains("async")
         val async = if (state.dxvkAsync.value && (isAsync || isGplAsync)) "1" else "0"
@@ -1155,7 +1138,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         val ddrawWrapper = StringUtils.parseIdentifier(
             state.dxvkDdrawWrapperEntries.value.getOrElse(state.dxvkSelectedDdrawWrapper.intValue) { Container.DEFAULT_DDRAWRAPPER }
         )
-        return "version=$version,framerate=$framerate,async=$async,asyncCache=$asyncCache," +
+        return "version=$version,async=$async,asyncCache=$asyncCache," +
             "vkd3dVersion=$vkd3dVersion,vkd3dLevel=$vkd3dLevel,ddrawrapper=$ddrawWrapper"
     }
 
@@ -1191,7 +1174,7 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
             if (curMajor != null && curMajor >= 2) {
                 selectByIdentifier(filtered, currentDxvk, state.dxvkSelectedVersion)
             } else {
-                selectByIdentifier(filtered, DefaultVersion.DXVK, state.dxvkSelectedVersion)
+                selectByIdentifier(filtered, "", state.dxvkSelectedVersion)
             }
         } else {
             loadDxvkVersions()
@@ -1257,9 +1240,11 @@ class ContainerSettingsComposeDialog @JvmOverloads constructor(
         return merged.joinToString(" ") { "${it.key}=${it.value}" }
     }
 
+    // Always emit the enumerated list. An empty string means "no override" at
+    // the Container layer and would fall back to getFallbackCPUList* — the
+    // WoW64 fallback is only upper-half cores, so saving "all checked" on the
+    // 32-bit chip row would silently reopen as half the cores.
     private fun buildCpuListString(checked: List<Boolean>): String {
-        val allChecked = checked.all { it }
-        if (allChecked) return ""
         return checked.mapIndexedNotNull { i, c -> if (c) "$i" else null }.joinToString(",")
     }
 

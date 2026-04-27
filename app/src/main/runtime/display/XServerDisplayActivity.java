@@ -85,7 +85,6 @@ import com.winlator.cmod.runtime.content.ContentsManager;
 import com.winlator.cmod.runtime.content.AdrenotoolsManager;
 import com.winlator.cmod.shared.android.AppUtils;
 import com.winlator.cmod.shared.android.AppTerminationHelper;
-import com.winlator.cmod.runtime.wine.DefaultVersion;
 import com.winlator.cmod.runtime.wine.EnvVars;
 import com.winlator.cmod.shared.io.FileUtils;
 import com.winlator.cmod.runtime.system.GPUInformation;
@@ -106,6 +105,7 @@ import com.winlator.cmod.runtime.wine.WineThemeManager;
 import com.winlator.cmod.runtime.wine.WineUtils;
 import com.winlator.cmod.runtime.compat.fexcore.FEXCoreManager;
 import com.winlator.cmod.runtime.compat.gamefixes.GameFixes;
+import com.winlator.cmod.runtime.audio.alsaserver.ALSAClient;
 import com.winlator.cmod.runtime.input.ControllerAssignmentDialog;
 import com.winlator.cmod.runtime.input.InputControlsDialog;
 import com.winlator.cmod.runtime.input.controls.ControlsProfile;
@@ -162,12 +162,12 @@ import java.util.HashSet;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import cn.sherlock.com.sun.media.sound.SF2Soundbank;
 
@@ -181,6 +181,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     private static final String STEAM_REGISTRY_KEY = "Software\\Valve\\Steam";
     private static final String STEAM_ROOT_PATH = "C:\\Program Files (x86)\\Steam";
     private static final String STEAM_EXE_PATH = STEAM_ROOT_PATH + "\\steam.exe";
+    private static final String D8VK_ASSET_PATH = "dxwrapper/d8vk-1.0.tzst";
     private static final String STEAM_USER_REGISTRY_BACKUP_FILE = "steam_registry_backup.reg";
     private static final String STEAM_SYSTEM_REGISTRY_BACKUP_FILE = "steam_system_registry_backup.reg";
     private static final String STEAM_CLIENT_STORE_RELATIVE_PATH = ".shared/steam-client-store";
@@ -240,6 +241,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     private ImageFs imageFs;
     private FrameRating frameRating = null;
     private boolean effectiveShowFPS = false;
+    private int runtimeFpsLimit = 0;
     private String lastRendererName = "OpenGL";
     private String lastGpuName = null;
     private Runnable editInputControlsCallback;
@@ -318,6 +320,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     private final AtomicBoolean steamExitWatchRunning = new AtomicBoolean(false);
     private final AtomicBoolean activityDestroyed = new AtomicBoolean(false);
     private final AtomicBoolean sessionCleanupStarted = new AtomicBoolean(false);
+    private final AtomicBoolean switchLaunchInProgress = new AtomicBoolean(false);
 
     private boolean isDarkMode;
     private boolean enableLogsMenu;
@@ -348,7 +351,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
     private final SharedPreferences.OnSharedPreferenceChangeListener prefListener = (sharedPreferences, key) -> {
         if ("gyro_enabled".equals(key) || "mouse_gyro_enabled".equals(key)) {
-            boolean gyroEnabled = sharedPreferences.getBoolean("gyro_enabled", false) || sharedPreferences.getBoolean("mouse_gyro_enabled", false);
+            boolean gyroEnabled = sharedPreferences.getBoolean("gyro_enabled", false);
             if (gyroEnabled) {
                 sensorManager.registerListener(gyroListener, gyroSensor, SensorManager.SENSOR_DELAY_GAME);
             } else {
@@ -395,16 +398,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         return Math.max(0, preferences.getInt("refresh_rate_override", 0));
     }
 
-    private boolean hasPerGameDxvkFrameRateOverride() {
-        if (shortcut == null || shortcutUsesContainerDefaults()) return false;
-
-        String shortcutDxwrapperConfig = shortcut.getExtra("dxwrapperConfig");
-        if (shortcutDxwrapperConfig.isEmpty()) return false;
-
-        KeyValueSet perGameConfig = DXVKConfigUtils.parseConfig(shortcutDxwrapperConfig);
-        return parsePositiveInt(perGameConfig.get("framerate")) > 0;
-    }
-
     /**
      * Per-game settings always win over the global refresh rate when determining DXVK frame limit.
      * Returns 0 (no override) when no explicit user preference is set, matching Ludashi behavior.
@@ -416,9 +409,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         int perGameRate = getPerGameRefreshRateOverride();
         if (perGameRate > 0) {
             return perGameRate;
-        }
-        if (hasPerGameDxvkFrameRateOverride()) {
-            return 0;
         }
 
         int globalRate = getGlobalRefreshRateOverride();
@@ -455,7 +445,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         Runnable applyRefresh = () -> {
             if (isFinishing() || isDestroyed()) return;
 
-            RefreshRateUtils.applyPreferredRefreshRate(this, getRefreshRateOverride());
+            RefreshRateUtils.applyPreferredRefreshRate(this, getRefreshRateOverride(), runtimeFpsLimit);
         };
 
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -490,9 +480,37 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         boolean containerChanged = incomingContainerId != 0 && incomingContainerId != currentContainerId;
 
         if (shortcutChanged || shortcutUuidChanged || containerChanged) {
-            Log.d("XServerDisplayActivity", "onNewIntent: launch target changed, recreating activity");
-            recreate();
+            Log.d("XServerDisplayActivity", "onNewIntent: launch target changed, cleaning up before recreation");
+            switchLaunchTargetAfterCleanup(intent);
         }
+    }
+
+    private void switchLaunchTargetAfterCleanup(Intent intent) {
+        if (!switchLaunchInProgress.compareAndSet(false, true)) {
+            Log.d("XServerDisplayActivity", "Switch launch already in progress; ignoring duplicate target intent");
+            return;
+        }
+
+        Intent relaunchIntent = new Intent(intent);
+        relaunchIntent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        setIntent(relaunchIntent);
+        exitRequested.set(true);
+
+        if (preloaderDialog != null) {
+            preloaderDialog.showOnUiThread(getString(R.string.preloader_initializing));
+        }
+
+        new Thread(() -> {
+            performForcedSessionCleanup("switch launch target");
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) {
+                    Log.w("XServerDisplayActivity", "Switch cleanup finished after activity was destroyed");
+                    return;
+                }
+                setIntent(relaunchIntent);
+                recreate();
+            });
+        }, "XServerSwitchCleanup").start();
     }
 
     @Override
@@ -550,7 +568,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
         preferences.registerOnSharedPreferenceChangeListener(prefListener);
 
-        boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false) || preferences.getBoolean("mouse_gyro_enabled", false);
+        boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false);
 
         if (gyroEnabled) {
             // Register the sensor event listener
@@ -1057,19 +1075,12 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     startupSelection + "'");
         }
 
-        // Normalize at runtime only. Do not persist here to avoid silently overwriting
-        // the version selected in container/shortcut settings on every launch.
-        String preNormalizedDxwrapperConfig = dxwrapperConfig;
-        dxwrapperConfig = normalizeDxwrapperConfigForCurrentWine(dxwrapperConfig);
-        Log.d("XServerDisplayActivity", "DXVK launch config normalized before='" +
-                preNormalizedDxwrapperConfig + "' after='" + dxwrapperConfig + "'");
-
         this.graphicsDriverConfig = GraphicsDriverConfigUtils.parseGraphicsDriverConfig(graphicsDriverConfig);
         this.dxwrapperConfig = DXVKConfigUtils.parseConfig(dxwrapperConfig);
-        Log.d("XServerDisplayActivity", "VKD3D version (from effective dxwrapperConfig)='" +
-                this.dxwrapperConfig.get("vkd3dVersion") + "' dxvkVersion='" +
-                this.dxwrapperConfig.get("version") + "' ddrawrapper='" +
-                this.dxwrapperConfig.get("ddrawrapper") + "'");
+        Log.i("XServerDisplayActivity", "Launch DX wrapper selected: dxwrapper='" +
+                dxwrapper + "' dxvkVersion='" + this.dxwrapperConfig.get("version") +
+                "' vkd3dVersion='" + this.dxwrapperConfig.get("vkd3dVersion") +
+                "' ddrawrapper='" + this.dxwrapperConfig.get("ddrawrapper") + "'");
         applyPreferredRefreshRate();
 
         if (!wineInfo.isWin64()) {
@@ -1089,7 +1100,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         showLaunchPreloader(getString(R.string.preloader_initializing));
 
         inputControlsManager = new InputControlsManager(this);
-        xServer = new XServer(new ScreenInfo(screenSize));
+        xServer = new XServer(new ScreenInfo(screenSize), isNativeRenderingEnabled);
         xServer.setWinHandler(winHandler);
 
         boolean[] winStarted = {false};
@@ -1433,23 +1444,19 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         String customExe = shortcut.getExtra("custom_exe");
         if (customExe != null && !customExe.isEmpty()) {
             File customExeFile = new File(customExe);
-            if (customExeFile.isFile()) {
-                return WineUtils.hostPathToRootWinePath(container, customExeFile.getAbsolutePath());
-            }
+            return WineUtils.hostPathToRootWinePath(container, customExeFile.getAbsolutePath());
         }
 
         String launchExePath = shortcut.getExtra("launch_exe_path");
         if (launchExePath != null && !launchExePath.isEmpty()) {
             File launchExeFile = new File(launchExePath);
-            if (launchExeFile.isFile()) {
-                return WineUtils.hostPathToRootWinePath(container, launchExeFile.getAbsolutePath());
-            }
+            return WineUtils.hostPathToRootWinePath(container, launchExeFile.getAbsolutePath());
         }
 
         String customGameFolder = resolveCustomMountPath(shortcut);
         if (!customGameFolder.isEmpty()) {
             File exeFile = findGameExe(new File(customGameFolder));
-            if (exeFile != null && exeFile.isFile()) {
+            if (exeFile != null) {
                 if ((shortcut.getExtra("launch_exe_path") == null || shortcut.getExtra("launch_exe_path").isEmpty())) {
                     shortcut.putExtra("launch_exe_path", exeFile.getAbsolutePath());
                     shortcut.saveData();
@@ -1471,8 +1478,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
         for (String candidatePath : candidatePaths) {
             if (candidatePath == null || candidatePath.isEmpty()) continue;
-            File candidateDir = new File(candidatePath);
-            if (candidateDir.isDirectory()) return candidateDir.getAbsolutePath();
+            return new File(candidatePath).getAbsolutePath();
         }
 
         return null;
@@ -1602,14 +1608,16 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     public void onResume() {
         super.onResume();
         applyPreferredRefreshRate();
-        boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false) || preferences.getBoolean("mouse_gyro_enabled", false);
+        boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false);
 
         if (gyroEnabled) {
             // Re-register the sensor listener when the activity is resumed
             sensorManager.registerListener(gyroListener, gyroSensor, SensorManager.SENSOR_DELAY_GAME);
         }
 
-        if (environment != null) {
+        boolean cleaningUp = exitRequested.get() || sessionCleanupStarted.get() || activityDestroyed.get();
+
+        if (!cleaningUp && environment != null) {
             xServerView.onResume();
             environment.onResume();
         }
@@ -1621,13 +1629,15 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         }
         startTime = System.currentTimeMillis();
         handler.postDelayed(savePlaytimeRunnable, SAVE_INTERVAL_MS);
-        ProcessHelper.resumeAllWineProcesses();
+        if (!cleaningUp) {
+            ProcessHelper.resumeAllWineProcesses();
+        }
     }
 
     @Override
     public void onPause() {
         super.onPause();
-        boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false) || preferences.getBoolean("mouse_gyro_enabled", false);
+        boolean gyroEnabled = preferences.getBoolean("gyro_enabled", false);
 
         if (gyroEnabled) {
             // Unregister the sensor listener when the activity is paused
@@ -1635,7 +1645,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         }
 
         // Check if we are entering Picture-in-Picture mode
-        if (!isInPictureInPictureMode()) {
+        boolean cleaningUp = exitRequested.get() || sessionCleanupStarted.get() || activityDestroyed.get();
+
+        if (!cleaningUp && !isInPictureInPictureMode()) {
             // Only pause environment and xServerView if not in PiP mode
             if (environment != null) {
                 environment.onPause();
@@ -1652,7 +1664,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
         savePlaytimeData();
         handler.removeCallbacks(savePlaytimeRunnable);
-        ProcessHelper.pauseAllWineProcesses();
+        if (!cleaningUp) {
+            ProcessHelper.pauseAllWineProcesses();
+        }
     }
 
 
@@ -1847,12 +1861,16 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         ArrayList<String> before = ProcessHelper.listRunningWineProcesses();
         if (before.isEmpty()) return;
 
-        Log.w("XServerDisplayActivity", "Cleaning lingering session processes before " + reason + ": " + before);
+        Log.w("XServerDisplayActivity", "Cleaning lingering session processes before " + reason + ": "
+                + ProcessHelper.listRunningWineProcessDetails());
         ArrayList<String> remaining = ProcessHelper.terminateSessionProcessesAndWait(2000, true);
         ProcessHelper.drainDeadChildren("pre-launch cleanup");
         ProcessHelper.scheduleDeadChildReapSweep("pre-launch cleanup", 2000, 200);
         if (!remaining.isEmpty()) {
-            Log.e("XServerDisplayActivity", "Session cleanup still has remaining processes after " + reason + ": " + remaining);
+            Log.e("XServerDisplayActivity", "Session cleanup still has remaining processes after " + reason + ": "
+                    + ProcessHelper.listRunningWineProcessDetails());
+        } else {
+            Log.i("XServerDisplayActivity", "No lingering session processes remain after " + reason);
         }
     }
 
@@ -1940,6 +1958,16 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         }
     }
 
+    private void stopXServer(String trigger) {
+        try {
+            if (xServer != null) {
+                xServer.stop();
+            }
+        } catch (Exception e) {
+            Log.w("XServerLeakCheck", "Failed to stop XServer during " + trigger, e);
+        }
+    }
+
     private void performForcedSessionCleanup(String trigger) {
         if (!beginSessionCleanup(trigger)) {
             Log.d("XServerLeakCheck", "Forced session cleanup already ran; skipping duplicate request from " + trigger);
@@ -1947,6 +1975,15 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         }
 
         Log.w("XServerLeakCheck", "Starting forced session cleanup from " + trigger);
+        Log.d("XServerLeakCheck", "Forced cleanup initial process snapshot: "
+                + ProcessHelper.listRunningWineProcessDetails());
+        try {
+            if (playtimePrefs != null) {
+                savePlaytimeData(true);
+            }
+        } catch (Exception e) {
+            Log.w("XServerLeakCheck", "Failed to flush playtime during forced cleanup", e);
+        }
         cleanupActivityCallbacks("forced cleanup (" + trigger + ")");
 
         try {
@@ -1988,6 +2025,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             Log.e("XServerLeakCheck", "Failed to stop WineRequestHandler during forced cleanup", e);
         }
 
+        ArrayList<String> remaining = ProcessHelper.terminateSessionProcessesAndWait(2000, true);
+        ProcessHelper.drainDeadChildren("forced cleanup (" + trigger + ")");
+        ProcessHelper.scheduleDeadChildReapSweep("forced cleanup (" + trigger + ")", 4000, 200);
+
         try {
             if (environment != null) {
                 environment.stopEnvironmentComponents();
@@ -1997,17 +2038,18 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             Log.e("XServerLeakCheck", "Failed to stop environment during forced cleanup", e);
         }
 
+        stopXServer("forced cleanup (" + trigger + ")");
         xServer = null;
         xServerView = null;
 
-        ArrayList<String> remaining = ProcessHelper.terminateSessionProcessesAndWait(2000, true);
-        ProcessHelper.drainDeadChildren("forced cleanup (" + trigger + ")");
-        ProcessHelper.scheduleDeadChildReapSweep("forced cleanup (" + trigger + ")", 4000, 200);
         if (remaining.isEmpty()) {
             Log.i("XServerLeakCheck", "Forced session cleanup finished cleanly after " + trigger);
         } else {
-            Log.e("XServerLeakCheck", "Remaining leaked session processes after forced cleanup from " + trigger + ": " + remaining);
+            Log.e("XServerLeakCheck", "Remaining leaked session processes after forced cleanup from " + trigger + ": "
+                    + ProcessHelper.listRunningWineProcessDetails());
         }
+        Log.d("XServerLeakCheck", "Forced cleanup final process snapshot: "
+                + ProcessHelper.listRunningWineProcessDetails());
     }
 
     private void exit() {
@@ -2035,7 +2077,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     if (!beginSessionCleanup("exit")) {
                         return;
                     }
-                    // We're about to hard-restart the process; make sure playtime is flushed.
                     savePlaytimeData(true);
                     cleanupActivityCallbacks("exit");
                     if (midiHandler != null) midiHandler.stop();
@@ -2055,18 +2096,26 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                         environment.stopEnvironmentComponents();
                         environment = null;
                     }
+                    Log.d("XServerDisplayActivity", "Process snapshot after environment stop: "
+                            + ProcessHelper.listRunningWineProcessDetails());
+                    stopXServer("exit");
                     winHandler = null;
                     wineRequestHandler = null;
                     midiHandler = null;
                     xServer = null;
                     xServerView = null;
                     if (preloaderDialog != null && preloaderDialog.isShowing()) preloaderDialog.closeOnUiThread();
-                    // Match Ludashi/vanilla behavior: restart the app to ensure native/GL
-                    // resources are fully released between sessions.
-                    AppUtils.restartApplication(XServerDisplayActivity.this, 0);
+                    returnToUnifiedActivity();
                 }
             }, 1000);
         });
+    }
+
+    private void returnToUnifiedActivity() {
+        Intent intent = new Intent(this, UnifiedActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        startActivity(intent);
+        finish();
     }
     
     /**
@@ -2532,7 +2581,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         }
         super.onDestroy();
         // Schedule a deferred update check 10 s after game exit
-        UpdateChecker.INSTANCE.schedulePostGameCheck(this);
+        if (!switchLaunchInProgress.get()) {
+            UpdateChecker.INSTANCE.schedulePostGameCheck(this);
+        }
 
         if (!sessionCleanupStarted.get()) {
             performForcedSessionCleanup("onDestroy");
@@ -2545,7 +2596,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         }
         ArrayList<String> remainingProcesses = ProcessHelper.listRunningWineProcesses();
         if (!remainingProcesses.isEmpty()) {
-            Log.e(tag, "Wine processes still running: " + remainingProcesses);
+            Log.e(tag, "Wine processes still running: " + ProcessHelper.listRunningWineProcessDetails());
+        } else {
+            Log.i(tag, "No Wine/session processes remain at onDestroy leak check");
         }
         if (environment != null) {
             Log.w(tag, "Environment not null — components may not have been stopped");
@@ -2679,7 +2732,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 hudElements,
                 dualSeriesBattery,
                 hudCardExpanded,
-                preferences.getBoolean("gyro_enabled", false) || preferences.getBoolean("mouse_gyro_enabled", false),
+                preferences.getBoolean("gyro_enabled", false),
                 preferences.getInt("gyro_mode", 0),
                 currentGyroActivatorLabel(),
                 preferences.getBoolean("process_gyro_with_left_trigger", false),
@@ -2744,9 +2797,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     public void onGyroscopeEnabledChanged(boolean enabled) {
                         SharedPreferences.Editor editor = preferences.edit();
                         editor.putBoolean("gyro_enabled", enabled);
-                        if (!enabled) {
-                            editor.putBoolean("mouse_gyro_enabled", false);
-                        }
                         editor.apply();
                         renderDrawerMenu();
                     }
@@ -2824,9 +2874,11 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
                     @Override
                     public void onFPSLimitChanged(int limit) {
+                        runtimeFpsLimit = Math.max(0, limit);
                         if (xServerView != null) {
-                            xServerView.getRenderer().setFpsLimit(limit);
+                            xServerView.getRenderer().setFpsLimit(runtimeFpsLimit);
                         }
+                        applyPreferredRefreshRate();
                         renderDrawerMenu();
                     }
                 };
@@ -3099,6 +3151,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             String dxvkWrapper = "dxvk-" + currentDXWrapperConfig.get("version");
             String vkd3dWrapper = "vkd3d-" + currentDXWrapperConfig.get("vkd3dVersion");
             String ddrawrapper = currentDXWrapperConfig.get("ddrawrapper");
+            Log.i("XServerDisplayActivity", "Launch DX wrapper files selected: dxvk='" +
+                    dxvkWrapper + "' vkd3d='" + vkd3dWrapper + "' ddrawrapper='" +
+                    ddrawrapper + "'");
             dxwrapper = dxvkWrapper + ";" + vkd3dWrapper + ";" + ddrawrapper;
         }
 
@@ -3132,8 +3187,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             setSteamClientVisibility(false);
         }
 
-        if (launchRealSteamSetup || isSteamGame) {
-            Log.d("XServerDisplayActivity", "Ensuring Steam client is ready (isSteamGame=" + isSteamGame + ")...");
+        if (launchRealSteamSetup) {
+            Log.d("XServerDisplayActivity", "Ensuring real Steam client is ready...");
             boolean steamReady = false;
             while (!steamReady) {
                 steamReady = SteamBridge.ensureSteamReady(this);
@@ -3148,16 +3203,19 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 }
             }
 
-            // Download and extract the experimental-drm file to provide steamclient_loader_x64.exe
-            if (isSteamGame && !launchRealSteamSetup) {
-                SteamBridge.ensureColdClientSupportReady(this);
-            } else if (launchRealSteamSetup) {
-                SteamBridge.ensureRealSteamSupportReady(this);
-            }
+            SteamBridge.ensureRealSteamSupportReady(this);
 
             // Verify essential Steam client DLLs exist in the wine prefix
-            verifySteamClientFiles(isSteamGame && !launchRealSteamSetup);
+            verifySteamClientFiles(false);
+        } else if (isSteamGame) {
+            Log.d("XServerDisplayActivity", "Real Steam client disabled; preparing ColdClient support only");
+            SteamBridge.ensureColdClientSupportReady(this);
 
+            // Verify ColdClient loader/support files without downloading or extracting steam.tzst.
+            verifySteamClientFiles(true);
+        }
+
+        if (launchRealSteamSetup || isSteamGame) {
             // Replace the game's steam_api DLLs and set up steam_settings for auth
             if (isSteamGame) {
                 try {
@@ -3204,6 +3262,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                             MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_DLL_REPLACED);
                             MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_COLDCLIENT_USED);
                             MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_DRM_PATCHED);
+                            MarkerUtils.INSTANCE.removeMarker(gameInstallPath, Marker.STEAM_DRM_UNPACK_CHECKED);
 
                             // Clean up a side-effect of an old "MoveSteamExe" hack: if a game
                             // dir still has a local steam.exe copy, real Steam's integrity
@@ -3420,7 +3479,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
         // Set environment variables
         envVars.put("LC_ALL", lc_all);
-        envVars.put("WINEPREFIX", imageFs.wineprefix);
+        String winePrefix = (shortcut != null && container != null && shortcut.path != null && shortcut.path.matches("^[cC]:.*")) ? new File(container.getRootDir(), ".wine").getAbsolutePath() : imageFs.wineprefix;
+        envVars.put("WINEPREFIX", winePrefix);
 
         boolean enableWineDebug = preferences.getBoolean("enable_wine_debug", false);
         String wineDebugChannels = preferences.getString("wine_debug_channels", SettingsConfig.DEFAULT_WINE_DEBUG_CHANNELS);
@@ -3576,7 +3636,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             envVars.put("ANDROID_ASERVER_USE_SHM", "true");
             environment.addComponent(
                     new ALSAServerComponent(
-                            UnixSocketConfig.createSocket(rootPath, UnixSocketConfig.ALSA_SERVER_PATH)
+                            UnixSocketConfig.createSocket(rootPath, UnixSocketConfig.ALSA_SERVER_PATH),
+                            ALSAClient.Options.fromEnvVars(envVars)
                     )
             );
         } else if (audioDriver.equals("pulseaudio")) {
@@ -3664,6 +3725,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         xServerView = new XServerView(this, xServer);
         final GLRenderer renderer = xServerView.getRenderer();
         renderer.setCursorVisible(false);
+        renderer.setNativeMode(isNativeRenderingEnabled);
 
         if (shortcut != null) {
             renderer.setUnviewableWMClasses("explorer.exe");
@@ -3772,177 +3834,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 ((TextView) child).setTextColor(color);
             }
         }
-    }
-
-    private String normalizeDxwrapperConfigForCurrentWine(String dxwrapperConfig) {
-        KeyValueSet config = DXVKConfigUtils.parseConfig(dxwrapperConfig);
-        boolean isArm64EC = wineInfo != null && wineInfo.isArm64EC();
-        boolean changed = false;
-
-        String normalizedDxvk = resolveInstalledGraphicsComponentVersion(
-                config.get("version"),
-                ContentProfile.ContentType.CONTENT_TYPE_DXVK,
-                isArm64EC
-        );
-        if (!normalizedDxvk.equals(config.get("version"))) {
-            config.put("version", normalizedDxvk);
-            changed = true;
-        }
-
-        String vkd3dVersion = config.get("vkd3dVersion");
-        if (!vkd3dVersion.isEmpty() && !"None".equalsIgnoreCase(vkd3dVersion)) {
-            String normalizedVkd3d = resolveInstalledGraphicsComponentVersion(
-                    vkd3dVersion,
-                    ContentProfile.ContentType.CONTENT_TYPE_VKD3D,
-                    isArm64EC
-            );
-            if (!normalizedVkd3d.equals(vkd3dVersion)) {
-                config.put("vkd3dVersion", normalizedVkd3d);
-                changed = true;
-            }
-        }
-
-        Log.d("XServerDisplayActivity", "normalizeDxwrapperConfigForCurrentWine input='" + dxwrapperConfig +
-                "' output='" + (changed ? config.toString() : dxwrapperConfig) + "' arm64ec=" + isArm64EC +
-                " changed=" + changed);
-        return changed ? config.toString() : dxwrapperConfig;
-    }
-
-    private String resolveInstalledGraphicsComponentVersion(
-            String currentVersion,
-            ContentProfile.ContentType type,
-            boolean isArm64EC
-    ) {
-        if (currentVersion == null || currentVersion.isEmpty()) {
-            return currentVersion;
-        }
-
-        ContentProfile currentProfile = resolveInstalledGraphicsProfileByToken(type, currentVersion);
-        if (currentProfile != null) {
-            Log.d("XServerDisplayActivity", "resolveInstalledGraphicsComponentVersion keep installed type=" + type +
-                    " current='" + currentVersion + "' arm64ec=" + isArm64EC);
-            return currentVersion;
-        }
-
-        if (hasBundledGraphicsComponent(type, currentVersion)) {
-            Log.d("XServerDisplayActivity", "resolveInstalledGraphicsComponentVersion keep bundled type=" + type +
-                    " current='" + currentVersion + "' arm64ec=" + isArm64EC);
-            return currentVersion;
-        }
-
-        String preferredProfileToken = findBestInstalledGraphicsToken(type, isArm64EC, null);
-        if (!preferredProfileToken.isEmpty()) {
-            Log.d("XServerDisplayActivity", "resolveInstalledGraphicsComponentVersion fallback preferred type=" + type +
-                    " current='" + currentVersion + "' to='" + preferredProfileToken + "' arm64ec=" + isArm64EC);
-            return preferredProfileToken;
-        }
-        Log.d("XServerDisplayActivity", "resolveInstalledGraphicsComponentVersion keep current (no fallback) type=" + type +
-                " current='" + currentVersion + "' arm64ec=" + isArm64EC);
-        return currentVersion;
-    }
-
-    private ContentProfile resolveInstalledGraphicsProfileByToken(
-            ContentProfile.ContentType type,
-            String versionToken
-    ) {
-        if (versionToken == null || versionToken.isEmpty()) return null;
-
-        ContentProfile directMatch = contentsManager.getProfileByEntryName(type.toString() + "-" + versionToken);
-        if (directMatch != null && directMatch.isInstalled) {
-            return directMatch;
-        }
-
-        for (ContentProfile profile : contentsManager.getProfiles(type)) {
-            if (!profile.isInstalled) continue;
-
-            String profileToken = getContentVersionToken(profile);
-            if (versionToken.equals(profileToken) || versionToken.equals(profile.verName)) {
-                Log.d("XServerDisplayActivity", "resolveInstalledGraphicsProfileByToken matched type=" + type +
-                        " token='" + versionToken + "' profileToken='" + profileToken +
-                        "' verName='" + profile.verName + "' verCode=" + profile.verCode);
-                return profile;
-            }
-        }
-        Log.d("XServerDisplayActivity", "resolveInstalledGraphicsProfileByToken no match type=" + type +
-                " token='" + versionToken + "'");
-        return null;
-    }
-
-    private boolean hasBundledGraphicsComponent(
-            ContentProfile.ContentType type,
-            String versionToken
-    ) {
-        if (versionToken == null || versionToken.isEmpty()) return false;
-
-        final String assetPath;
-        if (type == ContentProfile.ContentType.CONTENT_TYPE_DXVK) {
-            assetPath = "dxwrapper/dxvk-" + versionToken + ".tzst";
-        } else if (type == ContentProfile.ContentType.CONTENT_TYPE_VKD3D) {
-            assetPath = "dxwrapper/vkd3d-" + versionToken + ".tzst";
-        } else {
-            return false;
-        }
-
-        try (InputStream ignored = getAssets().open(assetPath)) {
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
-    }
-
-    private String findBestInstalledGraphicsToken(
-            ContentProfile.ContentType type,
-            boolean isArm64EC,
-            @Nullable String preferredVersionName
-    ) {
-        ContentProfile preferredProfile = null;
-        String normalizedPreferredName = normalizeGraphicsVersionName(preferredVersionName);
-
-        for (ContentProfile profile : contentsManager.getProfiles(type)) {
-            if (!profile.isInstalled) continue;
-
-            String versionToken = getContentVersionToken(profile);
-            if (isArm64ComponentVersion(versionToken) != isArm64EC) continue;
-
-            if (normalizedPreferredName != null && !normalizedPreferredName.equals(profile.verName)) continue;
-
-            if (preferredProfile == null ||
-                    profile.verCode > preferredProfile.verCode ||
-                    (profile.verCode == preferredProfile.verCode &&
-                            profile.verName.compareToIgnoreCase(preferredProfile.verName) > 0)) {
-                preferredProfile = profile;
-            }
-        }
-
-        String selected = preferredProfile != null ? getContentVersionToken(preferredProfile) : "";
-        Log.d("XServerDisplayActivity", "findBestInstalledGraphicsToken type=" + type +
-                " preferredName='" + preferredVersionName + "' normalizedPreferredName='" + normalizedPreferredName +
-                "' arm64ec=" + isArm64EC + " selected='" + selected + "'");
-        return selected;
-    }
-
-    private String normalizeGraphicsVersionName(@Nullable String versionToken) {
-        if (versionToken == null || versionToken.isEmpty()) return null;
-        int lastDashIndex = versionToken.lastIndexOf('-');
-        if (lastDashIndex <= 0 || lastDashIndex == versionToken.length() - 1) return versionToken;
-
-        String suffix = versionToken.substring(lastDashIndex + 1);
-        for (int i = 0; i < suffix.length(); i++) {
-            if (!Character.isDigit(suffix.charAt(i))) {
-                return versionToken;
-            }
-        }
-        return versionToken.substring(0, lastDashIndex);
-    }
-
-    private String getContentVersionToken(ContentProfile profile) {
-        String entryName = ContentsManager.getEntryName(profile);
-        int firstDashIndex = entryName.indexOf('-');
-        return firstDashIndex >= 0 ? entryName.substring(firstDashIndex + 1) : profile.verName;
-    }
-
-    private boolean isArm64ComponentVersion(String version) {
-        return version != null && version.toLowerCase().contains("arm64ec");
     }
 
     private void ensureWinePrefixReady() {
@@ -4119,6 +4010,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
         // Initialize checkbox states
         dialog.getShowTouchscreenControls().setValue(preferences.getBoolean("show_touchscreen_controls_enabled", false));
+        dialog.getOverlayOpacity().setValue(preferences.getFloat("overlay_opacity", InputControlsView.DEFAULT_OVERLAY_OPACITY));
         dialog.getTouchscreenHaptics().setValue(preferences.getBoolean("touchscreen_haptics_enabled", false));
         dialog.getGamepadVibration().setValue(preferences.getBoolean(ControllerManager.PREF_VIBRATION_GLOBAL, true));
 
@@ -4148,10 +4040,13 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         // Confirm callback
         dialog.setOnConfirmCallback(() -> {
             inputControlsView.setShowTouchscreenControls(dialog.getShowTouchscreenControls().getValue());
+            float overlayOpacity = dialog.getOverlayOpacity().getValue();
+            inputControlsView.setOverlayOpacity(overlayOpacity);
             boolean isHapticsEnabled = dialog.getTouchscreenHaptics().getValue();
             boolean isGamepadVibrationEnabled = dialog.getGamepadVibration().getValue();
             SharedPreferences.Editor editor = preferences.edit();
             editor.putBoolean("show_touchscreen_controls_enabled", dialog.getShowTouchscreenControls().getValue());
+            editor.putFloat("overlay_opacity", overlayOpacity);
             editor.putBoolean("touchscreen_haptics_enabled", isHapticsEnabled);
             editor.putBoolean(ControllerManager.PREF_VIBRATION_GLOBAL, isGamepadVibrationEnabled);
             editor.apply();
@@ -4308,19 +4203,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
     private void extractGraphicsDriverFiles() {
         String adrenoToolsDriverId = graphicsDriverConfig.get("version");
-        if ((adrenoToolsDriverId == null || adrenoToolsDriverId.isEmpty()) && "wrapper".equals(graphicsDriver)) {
-            try {
-                adrenoToolsDriverId = GPUInformation.isDriverSupported(DefaultVersion.WRAPPER_ADRENO, this)
-                        ? DefaultVersion.WRAPPER_ADRENO
-                        : DefaultVersion.WRAPPER;
-            } catch (Throwable e) {
-                adrenoToolsDriverId = DefaultVersion.WRAPPER;
-            }
-            graphicsDriverConfig.put("version", adrenoToolsDriverId);
-            Log.d("GraphicsDriverExtraction", "Graphics driver version was blank, falling back to " + adrenoToolsDriverId);
-        }
-
-        Log.d("GraphicsDriverExtraction", "Adrenotools DriverID: " + adrenoToolsDriverId);
+        Log.i("GraphicsDriverExtraction", "Launch graphics driver selected: graphicsDriver='" +
+                graphicsDriver + "' driverId='" + adrenoToolsDriverId + "'");
 
         // Re-apply refresh rate now that shortcut is loaded (per-game override may apply)
         applyPreferredRefreshRate();
@@ -4360,8 +4244,14 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         if (adrenoToolsDriverId != null && !adrenoToolsDriverId.isEmpty()
                 && !adrenoToolsDriverId.equals("System")) {
             AdrenotoolsManager adrenotoolsManager = new AdrenotoolsManager(this);
+            String driverDisplayName = adrenotoolsManager.getDriverName(adrenoToolsDriverId);
+            String driverVersion = adrenotoolsManager.getDriverVersion(adrenoToolsDriverId);
+            String driverLibrary = adrenotoolsManager.getLibraryName(adrenoToolsDriverId);
+            Log.i("GraphicsDriverExtraction", "Loading graphics/Turnip driver: id='" +
+                    adrenoToolsDriverId + "' name='" + driverDisplayName +
+                    "' version='" + driverVersion + "' library='" + driverLibrary + "'");
             adrenotoolsManager.setDriverById(envVars, imageFs, adrenoToolsDriverId);
-            Log.d("GraphicsDriverExtraction", "Driver env after Adrenotools: id='" +
+            Log.i("GraphicsDriverExtraction", "Loaded graphics/Turnip driver env: id='" +
                     adrenoToolsDriverId + "' path=" +
                     envVars.get("ADRENOTOOLS_DRIVER_PATH") + " name=" +
                     envVars.get("ADRENOTOOLS_DRIVER_NAME") + " hooks=" +
@@ -4415,12 +4305,17 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         String resourceType = graphicsDriverConfig.get("resourceType");
         envVars.put("WRAPPER_RESOURCE_TYPE", resourceType);
 
+        ArrayList<String> wsiDebugFlags = new ArrayList<>();
         if (!isNativeRenderingEnabled) {
-            envVars.put("MESA_VK_WSI_DEBUG", "sw");
+            wsiDebugFlags.add("sw");
+            envVars.put("LIBGL_DRI3_DISABLE", "1");
         }
         String syncFrame = graphicsDriverConfig.get("syncFrame");
         if ("1".equals(syncFrame)) {
-            envVars.put("MESA_VK_WSI_DEBUG", "forcesync");
+            wsiDebugFlags.add("forcesync");
+        }
+        if (!wsiDebugFlags.isEmpty()) {
+            envVars.put("MESA_VK_WSI_DEBUG", String.join(",", wsiDebugFlags));
         }
         Log.d("NativeRendering", "use_dri3=" + isNativeRenderingEnabled + " MESA_VK_WSI_DEBUG=" + envVars.get("MESA_VK_WSI_DEBUG"));
 
@@ -4543,28 +4438,22 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             if (dxvkProfile != null) {
                 Log.d(TAG, "Applying user-defined DXVK content profile: " + dxvkWrapper);
                 contentsManager.applyContent(dxvkProfile);
+                extractD8VKIfNeeded(dxvkWrapper, windowsDir);
             } else {
-                Log.d(TAG, "Extracting fallback DXVK .tzst archive: " + dxvkWrapper);
-                TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "dxwrapper/" + dxvkWrapper + ".tzst", windowsDir, onExtractFileListener);
-
-                if (compareVersion(dxvkWrapper, "2.4") < 0) {
-                    Log.d(TAG, "Extracting d8vk as part of DXVK version " + dxvkWrapper);
-                    TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "dxwrapper/d8vk-" + DefaultVersion.D8VK + ".tzst", windowsDir, onExtractFileListener);
-                }
+                Log.w(TAG, "DXVK content profile not installed; no bundled DXVK archive will be loaded: " + dxvkWrapper);
             }
 
             if (vkd3dWrapper.contains("None")) {
-                Log.d(TAG, "No VKD3D has been selected, restoring original d3d12");
+                Log.i(TAG, "Launch VKD3D selected: None; restoring original d3d12");
                 restoreOriginalDllFiles(new String[]{"d3d12.dll", "d3d12core.dll"});
             }
             else {
                 ContentProfile vkd3dProfile = contentsManager.getProfileByEntryName(vkd3dWrapper);
                 if (vkd3dProfile != null) {
-                    Log.d(TAG, "Applying user-defined VKD3D content profile: " + vkd3dWrapper);
+                    Log.i(TAG, "Loading VKD3D content profile: " + vkd3dWrapper);
                     contentsManager.applyContent(vkd3dProfile);
                 } else {
-                    Log.d(TAG, "Extracting fallback VKD3D .tzst archive: " + vkd3dWrapper);
-                    TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "dxwrapper/" + vkd3dWrapper + ".tzst", windowsDir, onExtractFileListener);
+                    Log.w(TAG, "VKD3D content profile not installed; no bundled VKD3D archive will be loaded: " + vkd3dWrapper);
                 }
             }
 
@@ -4588,6 +4477,19 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             Log.d(TAG, "Restoring original DLL files for wined3d.");
             restoreOriginalDllFiles(dlls);
         }
+    }
+
+    private void extractD8VKIfNeeded(String dxvkWrapper, File windowsDir) {
+        if (compareVersion(dxvkWrapper, "2.4") >= 0) return;
+
+        Log.d(TAG, "Extracting d8vk as part of DXVK version " + dxvkWrapper);
+        TarCompressorUtils.extract(
+                TarCompressorUtils.Type.ZSTD,
+                this,
+                D8VK_ASSET_PATH,
+                windowsDir,
+                onExtractFileListener
+        );
     }
 
     private static int compareVersion(String varA, String varB) {
@@ -4632,7 +4534,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             return 0;
         }
     }
-    
+
     private void extractWinComponentFiles() {
         Log.d("XServerDisplayActivity", "Extracting WinComponents");
         File rootDir = imageFs.getRootDir();
@@ -4843,6 +4745,17 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 }
                 extraArgs = (extraArgs != null && !extraArgs.isEmpty()) ? " " + extraArgs : "";
 
+                // Re-provision the per-container C:\WinNative\Games\<source>\<game> symlink in
+                // the CURRENT container. Needed after a user changes the shortcut's container
+                // via Settings — the symlink was only created in the original container, so the
+                // healthy C:\WinNative\... Exec would otherwise resolve to nothing in the new
+                // prefix. Mirrors Steam's ensureSteamappsCommonSymlink call above.
+                String storeInstallPath = shortcut.getExtra("game_install_path");
+                if (storeInstallPath != null && !storeInstallPath.isEmpty()
+                        && new File(storeInstallPath).exists()) {
+                    WineUtils.ensureDriveCGameSymlink(container, gameSource, storeInstallPath);
+                }
+
                 boolean needsAutoDetect = path == null || path.isEmpty()
                         || "D:\\".equals(path) || "D:\\\\".equals(path)
                         || "A:\\".equals(path) || "A:\\\\".equals(path);
@@ -4929,21 +4842,26 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 if (path != null && (path.startsWith("explorer") || path.contains(" /desktop"))) {
                     return path + extraArgs;
                 } else if (path != null) {
-                    int lastBackslash = path.lastIndexOf("\\");
-                    if (lastBackslash >= 0) {
-                        String dir = path.substring(0, lastBackslash);
-                        if (dir.endsWith(":")) dir += "\\";
-
-                        File nativeDir = com.winlator.cmod.runtime.wine.WineUtils.getNativePath(imageFs, dir);
-                        if (nativeDir != null && nativeDir.exists()) {
-                            launcherComponent.setWorkingDir(nativeDir);
-                            Log.d("XServerDisplayActivity", "Set native working dir for Custom process: " + nativeDir.getPath());
-                        }
-
-                        args = "\"" + path + "\"" + extraArgs;
+                    String nativeDirPath = getActiveGameDirectoryPath();
+                    if (nativeDirPath != null) {
+                        File nativeDir = new File(nativeDirPath);
+                        launcherComponent.setWorkingDir(nativeDir);
+                        Log.d("XServerDisplayActivity", "Set native working dir for Custom process: " + nativeDir.getPath());
                     } else {
-                        args = "\"" + path + "\"" + extraArgs;
+                        int lastBackslash = path.lastIndexOf("\\");
+                        if (lastBackslash >= 0) {
+                            String dir = path.substring(0, lastBackslash);
+                            if (dir.endsWith(":")) dir += "\\";
+
+                            File nativeDir = com.winlator.cmod.runtime.wine.WineUtils.getNativePath(this.container, imageFs, dir);
+                            if (nativeDir != null) {
+                                launcherComponent.setWorkingDir(nativeDir);
+                                Log.d("XServerDisplayActivity", "Set native working dir for Custom process: " + nativeDir.getPath());
+                            }
+                        }
                     }
+
+                    args = "\"" + path + "\"" + extraArgs;
                 } else {
                     args = "\"wfm.exe\"";
                 }
@@ -5011,12 +4929,13 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
         if (!allPresent) {
             Log.w("XServerDisplayActivity", "Steam client files missing in container, forcing re-extraction");
-            // Force re-extraction by extracting both archives to imageFs root
-            // The xuser symlink will direct files to the active container
+            // Force re-extraction by extracting the archive required by the active mode.
+            // Real Steam mode uses steam.tzst. ColdClient mode uses only experimental-drm.tzst
+            // so normal Steam game launches do not download or unpack the full Steam client.
             try {
                 File steamFile = new File(getFilesDir(), "steam.tzst");
                 File expFile = new File(getFilesDir(), "experimental-drm.tzst");
-                if (steamFile.exists()) {
+                if (!requireColdClientSupport && steamFile.exists()) {
                     com.winlator.cmod.shared.io.TarCompressorUtils.extract(
                             com.winlator.cmod.shared.io.TarCompressorUtils.Type.ZSTD,
                             steamFile, imageFs.getRootDir(), null);
@@ -5985,6 +5904,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             Log.w("XServerDisplayActivity", "Skipping Steamless — Mono not installed yet, will retry next launch");
             return;
         }
+        if (isSteamUnpackAlreadyHandled()) {
+            Log.d("XServerDisplayActivity", "Skipping Steamless/unpack check; executable already handled");
+            return;
+        }
         boolean unpackedExeExists = doesUnpackedExeExist();
         if (needsUnpacking || unpackFiles || !unpackedExeExists) {
             if (needsUnpacking || !unpackedExeExists) {
@@ -5994,6 +5917,77 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 // in case something (e.g. mode switch) restored the original.
                 ensureUnpackedExeActive();
             }
+        }
+    }
+
+    private boolean isSteamUnpackAlreadyHandled() {
+        if (shortcut == null || !"STEAM".equals(shortcut.getExtra("game_source"))) return false;
+        try {
+            int appId = Integer.parseInt(shortcut.getExtra("app_id"));
+            String gameInstallPath = resolveSteamGameInstallPath(appId);
+            if (gameInstallPath == null || gameInstallPath.isEmpty()) return false;
+
+            SteamExecutableInfo executableInfo = resolveSteamExecutableInfo(appId, gameInstallPath);
+            if (executableInfo == null) return false;
+
+            File unpackedExe = new File(gameInstallPath, executableInfo.relativePath + ".unpacked.exe");
+            File originalExe = new File(gameInstallPath, executableInfo.relativePath + ".original.exe");
+            if (MarkerUtils.INSTANCE.hasMarker(gameInstallPath, Marker.STEAM_DRM_PATCHED)
+                    && unpackedExe.exists()
+                    && originalExe.exists()) {
+                ensureUnpackedExeActive();
+                return true;
+            }
+
+            File checkedMarker = new File(gameInstallPath, Marker.STEAM_DRM_UNPACK_CHECKED.getFileName());
+            String expectedSignature = buildSteamUnpackSignature(executableInfo);
+            String actualSignature = checkedMarker.exists() ? FileUtils.readString(checkedMarker) : null;
+            return expectedSignature.equals(actualSignature);
+        } catch (Exception e) {
+            Log.w("XServerDisplayActivity", "Steamless handled-state check failed", e);
+            return false;
+        }
+    }
+
+    private void markSteamUnpackChecked(int appId, String gameInstallPath, String executablePath) {
+        try {
+            File exe = new File(gameInstallPath, executablePath.replace('\\', '/'));
+            if (!exe.exists()) return;
+            SteamExecutableInfo executableInfo =
+                    new SteamExecutableInfo(executablePath.replace('\\', '/'), exe);
+            File checkedMarker = new File(gameInstallPath, Marker.STEAM_DRM_UNPACK_CHECKED.getFileName());
+            FileUtils.writeString(checkedMarker, buildSteamUnpackSignature(executableInfo));
+        } catch (Exception e) {
+            Log.w("XServerDisplayActivity", "Failed to write Steamless checked marker", e);
+        }
+    }
+
+    private SteamExecutableInfo resolveSteamExecutableInfo(int appId, String gameInstallPath) {
+        String executablePath = container.getExecutablePath();
+        if (executablePath == null || executablePath.isEmpty()) {
+            executablePath = com.winlator.cmod.feature.stores.steam.service.SteamService.Companion.getInstalledExe(appId);
+        }
+        if (executablePath == null || executablePath.isEmpty()) return null;
+
+        String relativePath = executablePath.replace('\\', '/');
+        File exe = new File(gameInstallPath, relativePath);
+        if (!exe.exists()) return null;
+        return new SteamExecutableInfo(relativePath, exe);
+    }
+
+    private String buildSteamUnpackSignature(SteamExecutableInfo executableInfo) {
+        return executableInfo.relativePath + "\n"
+                + executableInfo.file.length() + "\n"
+                + executableInfo.file.lastModified() + "\n";
+    }
+
+    private static class SteamExecutableInfo {
+        final String relativePath;
+        final File file;
+
+        SteamExecutableInfo(String relativePath, File file) {
+            this.relativePath = relativePath;
+            this.file = file;
         }
     }
 
@@ -6362,6 +6356,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                             "Steamless: game does not use SteamStub DRM (all unpackers failed). "
                             + "Disabling Legacy DRM for this game to avoid future overhead.");
                     launcher.execShellCommand("wineserver -k");
+                    markSteamUnpackChecked(appId, gameInstallPath, executablePath);
                     container.setNeedsUnpacking(false);
                     container.saveData();
                 } else {

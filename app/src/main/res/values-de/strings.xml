@@ -186,6 +186,7 @@
     <string name="downloads_queue_phase_cancelled">Abgebrochen</string>
     <string name="downloads_queue_phase_failed">Fehlgeschlagen: %1$s</string>
     <string name="downloads_queue_cancel_download">Download abbrechen</string>
+    <string name="downloads_queue_empty">Keine aktiven Downloads.</string>
 
     <!-- Containers > List -->
     <string name="containers_list_new">Neuer Container</string>
@@ -555,7 +556,6 @@ Z. B. <b>META</b> für <i>Meta-Taste</i>, \n
     <string name="session_effects_profile_selection">Profilauswahl</string>
 
     <!-- Session > Display -->
-    <string name="session_display_show_fps">FPS anzeigen</string>
     <string name="session_display_orientation">Ausrichtung</string>
     <string name="session_display_horizontal">Horizontal</string>
     <string name="session_display_vertical">Vertikal</string>

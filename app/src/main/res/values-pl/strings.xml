@@ -186,6 +186,7 @@
     <string name="downloads_queue_phase_cancelled">Anulowano</string>
     <string name="downloads_queue_phase_failed">Błąd: %1$s</string>
     <string name="downloads_queue_cancel_download">Anuluj pobieranie</string>
+    <string name="downloads_queue_empty">Brak aktywnych pobrań.</string>
 
     <!-- Containers > List -->
     <string name="containers_list_new">Nowy kontener</string>
@@ -555,7 +556,6 @@ Np. <b>META</b> dla <i>klawisza META</i>, \n
     <string name="session_effects_profile_selection">Wybór profilu</string>
 
     <!-- Session > Display -->
-    <string name="session_display_show_fps">Pokaż FPS</string>
     <string name="session_display_orientation">Orientacja</string>
     <string name="session_display_horizontal">Pozioma</string>
     <string name="session_display_vertical">Pionowa</string>

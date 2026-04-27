@@ -187,6 +187,7 @@
     <string name="downloads_queue_phase_cancelled">Cancelled</string>
     <string name="downloads_queue_phase_failed">Failed: %1$s</string>
     <string name="downloads_queue_cancel_download">Cancel Download</string>
+    <string name="downloads_queue_empty">No active downloads.</string>
 
     <!-- Containers > List -->
     <string name="containers_list_new">New Container</string>
@@ -599,7 +600,6 @@ E.g. <b>META</b> for <i>META key</i>, \n
     <string name="session_effects_profile_selection">Profile Selection</string>
 
     <!-- Session > Display -->
-    <string name="session_display_show_fps">Show FPS</string>
     <string name="session_display_orientation">Orientation</string>
     <string name="session_display_horizontal">Horizontal</string>
     <string name="session_display_vertical">Vertical</string>

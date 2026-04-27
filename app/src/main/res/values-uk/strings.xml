@@ -186,6 +186,7 @@
     <string name="downloads_queue_phase_cancelled">Скасовано</string>
     <string name="downloads_queue_phase_failed">Помилка: %1$s</string>
     <string name="downloads_queue_cancel_download">Скасувати завантаження</string>
+    <string name="downloads_queue_empty">Немає активних завантажень.</string>
 
     <!-- Containers > List -->
     <string name="containers_list_new">Новий контейнер</string>
@@ -555,7 +556,6 @@
     <string name="session_effects_profile_selection">Вибір профілю</string>
 
     <!-- Session > Display -->
-    <string name="session_display_show_fps">Показати FPS</string>
     <string name="session_display_orientation">Орієнтація</string>
     <string name="session_display_horizontal">Горизонтальна</string>
     <string name="session_display_vertical">Вертикальна</string>
