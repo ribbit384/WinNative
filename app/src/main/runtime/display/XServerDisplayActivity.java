@@ -97,6 +97,11 @@ import com.winlator.cmod.runtime.system.ProcessHelper;
 import com.winlator.cmod.shared.android.RefreshRateUtils;
 import com.winlator.cmod.shared.util.StringUtils;
 import com.winlator.cmod.shared.io.TarCompressorUtils;
+import com.winlator.cmod.runtime.display.renderer.EffectComposer;
+import com.winlator.cmod.runtime.display.renderer.effects.CRTEffect;
+import com.winlator.cmod.runtime.display.renderer.effects.FSREffect;
+import com.winlator.cmod.runtime.display.renderer.effects.HDREffect;
+import com.winlator.cmod.runtime.display.renderer.effects.NaturalEffect;
 import com.winlator.cmod.runtime.wine.WineInfo;
 import com.winlator.cmod.runtime.wine.WineRegistryEditor;
 import com.winlator.cmod.runtime.wine.WineRequestHandler;
@@ -267,8 +272,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     private float globalCursorSpeed = 1.0f;
     private MagnifierView magnifierView;
     private DebugDialog debugDialog;
-    private short taskAffinityMask = 0;
-    private short taskAffinityMaskWoW64 = 0;
+    private int taskAffinityMask = 0;
+    private int taskAffinityMaskWoW64 = 0;
     private int frameRatingWindowId = -1;
     private boolean cursorLock; // Flag to track if pointer capture was requested
     private final float[] xform = XForm.getInstance();
@@ -288,6 +293,11 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     private boolean[] hudElements = new boolean[]{true, true, true, true, true, true};
     private boolean dualSeriesBattery = false;
     private boolean hudCardExpanded = false;
+    private boolean screenEffectsCardExpanded = false;
+    private boolean fsrEnabled = false;
+    private int fsrMode = 0;
+    private int fsrSharpness = 100;
+    private int colorProfile = 0;
     private boolean gyroscopeCardExpanded = false;
     private XServerDrawerStateHolder drawerStateHolder;
     private XServerDrawerActionListener drawerActionListener;
@@ -326,8 +336,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
     private boolean isDarkMode;
     private boolean enableLogsMenu;
-
-    private String screenEffectProfile;
 
     private GuestProgramLauncherComponent guestProgramLauncherComponent;
     private EnvVars overrideEnvVars;
@@ -669,6 +677,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         containerManager = new ContainerManager(this);
         container = containerManager.getContainerById(getIntent().getIntExtra("container_id", 0));
         loadHUDSettings();
+        loadScreenEffectsSettings();
 
         // Determine launch target from intent extras and URI fallback.
         int containerId = getIntent().getIntExtra("container_id", 0);
@@ -812,8 +821,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         String containerCpuListWoW64 = container.getCPUListWoW64(true);
         String effectiveCpuList = containerCpuList;
         String effectiveCpuListWoW64 = containerCpuListWoW64;
-        taskAffinityMask = (short) ProcessHelper.getAffinityMask(containerCpuList);
-        taskAffinityMaskWoW64 = (short) ProcessHelper.getAffinityMask(containerCpuListWoW64);
+        taskAffinityMask = ProcessHelper.getAffinityMask(containerCpuList);
+        taskAffinityMaskWoW64 = ProcessHelper.getAffinityMask(containerCpuListWoW64);
 
         String rawShortcutCpuList = "";
         String rawShortcutCpuListWoW64 = "";
@@ -823,8 +832,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             rawShortcutCpuListWoW64 = cpuShortcutUsesDefaults ? "" : shortcut.getExtra("cpuListWoW64");
             effectiveCpuList = getShortcutSetting("cpuList", containerCpuList);
             effectiveCpuListWoW64 = getShortcutSetting("cpuListWoW64", containerCpuListWoW64);
-            taskAffinityMask = (short) ProcessHelper.getAffinityMask(effectiveCpuList);
-            taskAffinityMaskWoW64 = (short) ProcessHelper.getAffinityMask(effectiveCpuListWoW64);
+            taskAffinityMask = ProcessHelper.getAffinityMask(effectiveCpuList);
+            taskAffinityMaskWoW64 = ProcessHelper.getAffinityMask(effectiveCpuListWoW64);
         }
         Log.d("XServerDisplayActivity", "CPUList source=shortcutOrContainer shortcutRaw='" +
                 rawShortcutCpuList + "' container='" + containerCpuList +
@@ -2770,7 +2779,12 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 preferences.getBoolean("invert_gyro_x", false),
                 preferences.getBoolean("invert_gyro_y", false),
                 gyroscopeCardExpanded,
-                xServerView != null ? xServerView.getRenderer().getFpsLimit() : 0
+                xServerView != null ? xServerView.getRenderer().getFpsLimit() : 0,
+                screenEffectsCardExpanded,
+                fsrEnabled,
+                fsrMode,
+                fsrSharpness,
+                colorProfile
         );
 
         if (drawerActionListener == null) {
@@ -2904,6 +2918,48 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                             xServerView.getRenderer().setFpsLimit(runtimeFpsLimit);
                         }
                         applyPreferredRefreshRate();
+                        if (shortcut != null) {
+                            shortcut.putExtra("fpsLimit", runtimeFpsLimit > 0 ? String.valueOf(runtimeFpsLimit) : null);
+                            shortcut.saveData();
+                        }
+                        renderDrawerMenu();
+                    }
+
+                    @Override
+                    public void onScreenEffectsCardExpandedChanged(boolean expanded) {
+                        screenEffectsCardExpanded = expanded;
+                        renderDrawerMenu();
+                    }
+
+                    @Override
+                    public void onFSREnabledChanged(boolean enabled) {
+                        fsrEnabled = enabled;
+                        preferences.edit().putBoolean("fsr_enabled", enabled).apply();
+                        applyScreenEffects();
+                        renderDrawerMenu();
+                    }
+
+                    @Override
+                    public void onFSRModeSelected(int mode) {
+                        fsrMode = mode;
+                        preferences.edit().putInt("fsr_mode", mode).apply();
+                        applyScreenEffects();
+                        renderDrawerMenu();
+                    }
+
+                    @Override
+                    public void onFSRSharpnessChanged(int sharpness) {
+                        fsrSharpness = sharpness;
+                        preferences.edit().putInt("fsr_sharpness", sharpness).apply();
+                        applyScreenEffects();
+                        renderDrawerMenu();
+                    }
+
+                    @Override
+                    public void onColorProfileSelected(int profile) {
+                        colorProfile = profile;
+                        preferences.edit().putInt("color_profile", profile).apply();
+                        applyScreenEffects();
                         renderDrawerMenu();
                     }
                 };
@@ -2921,6 +2977,51 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         }
 
         drawerStateHolder.setState(state);
+    }
+
+    private void applyScreenEffects() {
+        GLRenderer renderer = xServerView != null ? xServerView.getRenderer() : null;
+        if (renderer == null) return;
+        EffectComposer composer = renderer.getEffectComposer();
+        if (composer == null) return;
+
+        // Handle FSR
+        FSREffect fsr = composer.getEffect(FSREffect.class);
+        if (fsrEnabled) {
+            if (fsr == null) {
+                fsr = new FSREffect();
+                composer.addEffect(fsr);
+            }
+            fsr.setMode(fsrMode);
+            fsr.setLevel((fsrSharpness / 25.0f) + 1.0f);
+        } else if (fsr != null) {
+            composer.removeEffect(fsr);
+        }
+
+        // Handle Color Profiles
+        composer.removeEffect(composer.getEffect(HDREffect.class));
+        composer.removeEffect(composer.getEffect(NaturalEffect.class));
+        composer.removeEffect(composer.getEffect(CRTEffect.class));
+
+        switch (colorProfile) {
+            case 1: // HDR
+                composer.addEffect(new HDREffect());
+                break;
+            case 2: // Natural
+                composer.addEffect(new NaturalEffect());
+                break;
+            case 3: // CRT Effect
+                composer.addEffect(new CRTEffect());
+                break;
+        }
+    }
+
+    private void loadScreenEffectsSettings() {
+        if (preferences == null) return;
+        fsrEnabled = preferences.getBoolean("fsr_enabled", false);
+        fsrMode = preferences.getInt("fsr_mode", 0);
+        fsrSharpness = preferences.getInt("fsr_sharpness", 100);
+        colorProfile = preferences.getInt("color_profile", 0);
     }
 
     private void loadHUDSettings() {
@@ -3072,10 +3173,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     container.addView(magnifierView);
                 }
                 renderDrawerMenu();
-                break;
-            case R.id.main_menu_screen_effects:
-                new ScreenEffectDialog(this).show();
-                drawerLayout.closeDrawers();
                 break;
             case R.id.main_menu_logs:
                 debugDialog.show();
@@ -3894,8 +3991,16 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
         if (shortcut != null) {
             renderer.setUnviewableWMClasses("explorer.exe");
+            String savedFpsLimit = shortcut.getExtra("fpsLimit", "0");
+            try {
+                runtimeFpsLimit = Integer.parseInt(savedFpsLimit);
+                renderer.setFpsLimit(runtimeFpsLimit);
+            } catch (NumberFormatException e) {
+                runtimeFpsLimit = 0;
+            }
         }
 
+        applyScreenEffects();
         xServer.setRenderer(renderer);
         rootView.addView(xServerView);
 
@@ -7521,10 +7626,12 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     }
 
     private void assignTaskAffinity(Window window) {
-        if (taskAffinityMask == 0 || taskAffinityMaskWoW64 == 0) return;
+        if (taskAffinityMask == 0 && taskAffinityMaskWoW64 == 0) return;
         int processId = window.getProcessId();
         String className = window.getClassName();
         int processAffinity = window.isWoW64() ? taskAffinityMaskWoW64 : taskAffinityMask;
+
+        if (processAffinity == 0) return;
 
         if (processId > 0) {
             winHandler.setProcessAffinity(processId, processAffinity);
@@ -7629,14 +7736,6 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
     private void updateHUDRenderMode() {
         // Render mode is always CONTINUOUSLY for best game performance
-    }
-
-    public String getScreenEffectProfile() {
-        return screenEffectProfile;
-    }
-
-    public void setScreenEffectProfile(String screenEffectProfile) {
-        this.screenEffectProfile = screenEffectProfile;
     }
 
     /**
