@@ -187,6 +187,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     private static final String STEAM_ROOT_PATH = "C:\\Program Files (x86)\\Steam";
     private static final String STEAM_EXE_PATH = STEAM_ROOT_PATH + "\\steam.exe";
     private static final String D8VK_ASSET_PATH = "dxwrapper/d8vk-1.0.tzst";
+    private static final long WINLATOR11_WINHANDLER_SIZE_BYTES = 64482L;
     private static final String STEAM_USER_REGISTRY_BACKUP_FILE = "steam_registry_backup.reg";
     private static final String STEAM_SYSTEM_REGISTRY_BACKUP_FILE = "steam_system_registry_backup.reg";
     private static final String STEAM_CLIENT_STORE_RELATIVE_PATH = ".shared/steam-client-store";
@@ -4060,6 +4061,30 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 }
             }
         }
+
+        ensureBundledWinHandlerVersion(containerWindowsDir);
+    }
+
+    private void ensureBundledWinHandlerVersion(File containerWindowsDir) {
+        File winHandlerFile = new File(containerWindowsDir, "winhandler.exe");
+        if (!winHandlerFile.exists()) return;
+        if (winHandlerFile.length() == WINLATOR11_WINHANDLER_SIZE_BYTES) return;
+
+        Log.i("ContainerLaunch", "Refreshing winhandler.exe from bundled Winlator 11 build");
+        boolean extracted = TarCompressorUtils.extract(
+                TarCompressorUtils.Type.ZSTD,
+                this,
+                "container_pattern_common.tzst",
+                imageFs.getRootDir(),
+                (file, size) -> {
+                    String path = file.getPath().replace('\\', '/');
+                    if (path.endsWith("/home/xuser/.wine/drive_c/windows/winhandler.exe")) {
+                        return winHandlerFile;
+                    }
+                    return null;
+                });
+        Log.d("ContainerLaunch", "winhandler.exe refresh result=" + extracted +
+                " size=" + winHandlerFile.length());
     }
 
     private boolean ensureRequestedWineVersionInstalled() {

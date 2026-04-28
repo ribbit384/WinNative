@@ -1,10 +1,14 @@
 package com.winlator.cmod.runtime.display.winhandler;
 
 import android.content.Context;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.hardware.input.InputManager;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
+import android.net.Uri;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.util.Log;
@@ -45,6 +49,9 @@ import java.util.concurrent.TimeUnit;
 
 public class WinHandler {
   private static final short CLIENT_PORT = 7946;
+  private static final byte DEFAULT_PACKET_LENGTH = 64;
+  private static final short DINPUT_PACKET_LENGTH = 128;
+  private static final short XINPUT_PACKET_LENGTH = 16;
   public static final byte DEFAULT_INPUT_TYPE = 4;
   public static final byte FLAG_INPUT_TYPE_DINPUT = 8;
   public static final byte FLAG_INPUT_TYPE_XINPUT = 4;
@@ -59,6 +66,7 @@ public class WinHandler {
   private static final short SERVER_PORT = 7947;
   private static final float GYRO_AXIS_EPSILON = 0.001f;
   private static final float GYRO_TRIGGER_PRESS_THRESHOLD = 0.15f;
+  private static final int UDP_VIBRATION_DURATION_MS = 1000;
   private final XServerDisplayActivity activity;
   private String fakeInputBasePath;
   private final InputManager inputManager;
@@ -67,10 +75,12 @@ public class WinHandler {
   private SharedPreferences preferences;
   private DatagramSocket socket;
   private boolean xinputDisabled;
-  private final ByteBuffer sendData = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN);
-  private final ByteBuffer receiveData = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN);
-  private final DatagramPacket sendPacket = new DatagramPacket(this.sendData.array(), 64);
-  private final DatagramPacket receivePacket = new DatagramPacket(this.receiveData.array(), 64);
+  private final ByteBuffer sendData = ByteBuffer.allocate(DINPUT_PACKET_LENGTH).order(ByteOrder.LITTLE_ENDIAN);
+  private final ByteBuffer receiveData = ByteBuffer.allocate(DEFAULT_PACKET_LENGTH).order(ByteOrder.LITTLE_ENDIAN);
+  private final DatagramPacket sendPacket =
+      new DatagramPacket(this.sendData.array(), this.sendData.capacity());
+  private final DatagramPacket receivePacket =
+      new DatagramPacket(this.receiveData.array(), this.receiveData.capacity());
   private final ArrayDeque<Runnable> actions = new ArrayDeque<>();
   private boolean initReceived = false;
   private volatile boolean running = false;
@@ -79,7 +89,7 @@ public class WinHandler {
   private ExecutorService vibrationExecutor;
   private final Map<Integer, ExternalController> controllers = new HashMap();
   private byte inputType = 4;
-  private final List<Integer> gamepadClients = new CopyOnWriteArrayList();
+  private final List<GamepadClient> gamepadClients = new CopyOnWriteArrayList<>();
   private FakeInputWriter[] writers = new FakeInputWriter[MAX_CONTROLLERS];
   private Map<Integer, Integer> deviceToSlot = new HashMap();
   private Map<String, Integer> descriptorToSlot = new HashMap<>(); // physical device → slot
@@ -119,6 +129,30 @@ public class WinHandler {
         @Override
         public void onInputDeviceChanged(int deviceId) {}
       };
+
+  private static class GamepadClient {
+    final int port;
+    final int processId;
+    final boolean xInput;
+    final boolean[] enabledSlots = new boolean[MAX_CONTROLLERS];
+    boolean updatedOnce;
+
+    GamepadClient(int port, int processId, boolean xInput) {
+      this.port = port;
+      this.processId = processId;
+      this.xInput = xInput;
+    }
+  }
+
+  private static class GamepadSlotState {
+    final String name;
+    final GamepadState state;
+
+    GamepadSlotState(String name, GamepadState state) {
+      this.name = name;
+      this.state = state;
+    }
+  }
 
   public WinHandler(XServerDisplayActivity activity) {
     this.activity = activity;
@@ -225,6 +259,10 @@ public class WinHandler {
   }
 
   private boolean sendPacket(int port) throws IOException {
+    return sendPacket(port, DEFAULT_PACKET_LENGTH);
+  }
+
+  private boolean sendPacket(int port, int packetLength) throws IOException {
     try {
       int size = this.sendData.position();
       if (size == 0) {
@@ -232,10 +270,27 @@ public class WinHandler {
       }
       this.sendPacket.setAddress(this.localhost);
       this.sendPacket.setPort(port);
+      this.sendPacket.setLength(packetLength);
+      this.socket.send(this.sendPacket);
+      this.sendPacket.setLength(DEFAULT_PACKET_LENGTH);
+      return true;
+    } catch (IOException e) {
+      return false;
+    }
+  }
+
+  private boolean sendPacket(int port, byte[] data) throws IOException {
+    try {
+      this.sendPacket.setData(data);
+      this.sendPacket.setAddress(this.localhost);
+      this.sendPacket.setPort(port);
       this.socket.send(this.sendPacket);
       return true;
     } catch (IOException e) {
       return false;
+    } finally {
+      this.sendPacket.setData(this.sendData.array());
+      this.sendPacket.setLength(DEFAULT_PACKET_LENGTH);
     }
   }
 
@@ -270,7 +325,7 @@ public class WinHandler {
             byte[] filenameBytes = filename.getBytes();
             byte[] parametersBytes = parameters.getBytes();
             this.sendData.rewind();
-            this.sendData.put((byte) 2);
+            this.sendData.put(RequestCodes.EXEC);
             this.sendData.putInt(filenameBytes.length + parametersBytes.length + 8);
             this.sendData.putInt(filenameBytes.length);
             this.sendData.putInt(parametersBytes.length);
@@ -283,14 +338,24 @@ public class WinHandler {
   }
 
   public void killProcess(final String processName) {
+    killProcess(processName, 0);
+  }
+
+  public void killProcess(final String processName, final int pid) {
     addAction(
         () -> {
           try {
             this.sendData.rewind();
-            this.sendData.put((byte) 3);
-            byte[] bytes = processName.getBytes();
-            this.sendData.putInt(bytes.length);
-            this.sendData.put(bytes);
+            this.sendData.put(RequestCodes.KILL_PROCESS);
+            if (processName != null) {
+              byte[] bytes = processName.getBytes();
+              int minLength = Math.min(bytes.length, 55);
+              this.sendData.putInt(minLength);
+              this.sendData.put(bytes, 0, minLength);
+            } else {
+              this.sendData.putInt(0);
+            }
+            this.sendData.putInt(pid);
             sendPacket(CLIENT_PORT);
           } catch (IOException ignored) {
           }
@@ -302,7 +367,7 @@ public class WinHandler {
         () -> {
           try {
             this.sendData.rewind();
-            this.sendData.put((byte) 4);
+            this.sendData.put(RequestCodes.LIST_PROCESSES);
             this.sendData.putInt(0);
             if (!sendPacket(CLIENT_PORT) && this.onGetProcessInfoListener != null) {
               this.onGetProcessInfoListener.onGetProcessInfo(0, 0, null);
@@ -318,7 +383,7 @@ public class WinHandler {
           try {
             byte[] bytes = processName.getBytes();
             this.sendData.rewind();
-            this.sendData.put((byte) 6);
+            this.sendData.put(RequestCodes.SET_PROCESS_AFFINITY);
             this.sendData.putInt(bytes.length + 9);
             this.sendData.putInt(0);
             this.sendData.putInt(affinityMask);
@@ -335,7 +400,7 @@ public class WinHandler {
         () -> {
           try {
             this.sendData.rewind();
-            this.sendData.put((byte) 6);
+            this.sendData.put(RequestCodes.SET_PROCESS_AFFINITY);
             this.sendData.putInt(9);
             this.sendData.putInt(pid);
             this.sendData.putInt(affinityMask);
@@ -354,7 +419,7 @@ public class WinHandler {
         () -> {
           try {
             this.sendData.rewind();
-            this.sendData.put((byte) 7);
+            this.sendData.put(RequestCodes.MOUSE_EVENT);
             this.sendData.putInt(10);
             this.sendData.putInt(flags);
             this.sendData.putShort((short) dx);
@@ -375,7 +440,7 @@ public class WinHandler {
         () -> {
           try {
             this.sendData.rewind();
-            this.sendData.put((byte) 11);
+            this.sendData.put(RequestCodes.KEYBOARD_EVENT);
             this.sendData.put(vkey);
             this.sendData.putInt(flags);
             sendPacket(CLIENT_PORT);
@@ -393,15 +458,48 @@ public class WinHandler {
         () -> {
           try {
             this.sendData.rewind();
-            this.sendData.put((byte) 12);
+            this.sendData.put(RequestCodes.BRING_TO_FRONT);
             byte[] bytes = processName.getBytes();
-            this.sendData.putInt(bytes.length);
-            this.sendData.put(bytes);
+            int minLength = Math.min(bytes.length, 51);
+            this.sendData.putInt(minLength);
+            this.sendData.put(bytes, 0, minLength);
             this.sendData.putLong(handle);
             sendPacket(CLIENT_PORT);
           } catch (BufferOverflowException e) {
             e.printStackTrace();
             this.sendData.rewind();
+          } catch (IOException ignored) {
+          }
+        });
+  }
+
+  public void showDesktop() {
+    addAction(
+        () -> {
+          try {
+            this.sendData.rewind();
+            this.sendData.put(RequestCodes.SHOW_DESKTOP);
+            this.sendData.putInt(0);
+            sendPacket(CLIENT_PORT);
+          } catch (IOException ignored) {
+          }
+        });
+  }
+
+  public void setClipboardData(final String data) {
+    if (data == null) {
+      return;
+    }
+    addAction(
+        () -> {
+          try {
+            this.sendData.rewind();
+            byte[] bytes = data.getBytes();
+            this.sendData.put(RequestCodes.SET_CLIPBOARD_DATA);
+            this.sendData.putInt(bytes.length);
+            if (sendPacket(CLIENT_PORT)) {
+              sendPacket(CLIENT_PORT, bytes);
+            }
           } catch (IOException ignored) {
           }
         });
@@ -469,9 +567,233 @@ public class WinHandler {
     if (this.vibrationExecutor != null) this.vibrationExecutor.shutdownNow();
   }
 
+  private boolean isXInputEnabled() {
+    return !this.xinputDisabled
+        && (this.inputType & FLAG_INPUT_TYPE_XINPUT) == FLAG_INPUT_TYPE_XINPUT;
+  }
+
+  private boolean isDInputEnabled() {
+    return (this.inputType & FLAG_INPUT_TYPE_DINPUT) == FLAG_INPUT_TYPE_DINPUT;
+  }
+
+  private byte getDInputMapperType() {
+    return (byte)
+        (((this.inputType & FLAG_DINPUT_MAPPER_STANDARD) == FLAG_DINPUT_MAPPER_STANDARD) ? 0 : 1);
+  }
+
+  private GamepadSlotState[] collectGamepadSlots() {
+    if (this.fakeInputBasePath != null && !this.fakeInputBasePath.isEmpty()) {
+      preAssignConnectedControllers();
+    }
+    if (canUseVirtualGamepad()) {
+      assignSlot(OSC_DEVICE_ID);
+    }
+
+    GamepadSlotState[] slots = new GamepadSlotState[MAX_CONTROLLERS];
+    ControlsProfile profile = this.activity.getInputControlsView().getProfile();
+    if (profile != null && canUseVirtualGamepad()) {
+      Integer slot = this.deviceToSlot.get(OSC_DEVICE_ID);
+      if (slot != null && slot >= 0 && slot < MAX_CONTROLLERS) {
+        slots[slot] =
+            new GamepadSlotState(profile.getName(), getOutputGamepadState(profile.getGamepadState(), false));
+      }
+    }
+
+    for (Map.Entry<Integer, Integer> entry : this.deviceToSlot.entrySet()) {
+      int deviceId = entry.getKey();
+      int slot = entry.getValue();
+      if (deviceId == OSC_DEVICE_ID || slot < 0 || slot >= MAX_CONTROLLERS || slots[slot] != null) {
+        continue;
+      }
+
+      ExternalController controller = getController(deviceId);
+      if (controller == null) {
+        continue;
+      }
+      GamepadState state = controller.state;
+      if (profile != null) {
+        ExternalController profileController = profile.getController(controller.getDeviceId());
+        if (profileController != null && profileController.getControllerBindingCount() > 0) {
+          state = controller.remappedState;
+        }
+      }
+      slots[slot] = new GamepadSlotState(controller.getName(), getOutputGamepadState(state, false));
+    }
+    return slots;
+  }
+
+  private void handleGetGamepadRequest(final int port) {
+    boolean isXInput = this.receiveData.get() == 1;
+    boolean notify = this.receiveData.get() == 1;
+    int processId = this.receiveData.getInt();
+    boolean updatedOnce = this.receiveData.get() == 1;
+    GamepadSlotState[] slots = collectGamepadSlots();
+
+    if ((isXInput && !isXInputEnabled()) || (!isXInput && !isDInputEnabled())) {
+      notify = false;
+      Arrays.fill(slots, null);
+    }
+
+    int clientIndex = findGamepadClientIndex(port, null, null);
+    GamepadClient client = null;
+    if (notify) {
+      if (clientIndex == -1) {
+        client = new GamepadClient(port, processId, isXInput);
+        this.gamepadClients.add(client);
+      } else {
+        client = this.gamepadClients.get(clientIndex);
+      }
+      client.updatedOnce = updatedOnce;
+      for (int i = 0; i < MAX_CONTROLLERS && this.receiveData.hasRemaining(); i++) {
+        client.enabledSlots[i] = this.receiveData.get() == 1;
+      }
+      if (!isXInput && isXInputEnabled()) {
+        suppressDInputSlotsAlreadyClaimedByXInput(processId, client);
+      }
+    } else if (clientIndex != -1) {
+      this.gamepadClients.remove(clientIndex);
+    }
+
+    final GamepadSlotState[] responseSlots = slots;
+    final boolean responseIsXInput = isXInput;
+    addAction(
+        () -> {
+          try {
+            this.sendData.rewind();
+            this.sendData.put(RequestCodes.GET_GAMEPAD);
+            if (responseIsXInput) {
+              for (int i = 0; i < MAX_CONTROLLERS; i++) {
+                this.sendData.put((byte) (responseSlots[i] != null ? 1 : 0));
+                this.sendData.put((byte) (isVibrationEnabledForSlot(i) ? 1 : 0));
+              }
+              sendPacket(port, XINPUT_PACKET_LENGTH);
+            } else {
+              this.sendData.put(getDInputMapperType());
+              for (int i = 0; i < MAX_CONTROLLERS; i++) {
+                GamepadSlotState slot = responseSlots[i];
+                if (slot != null) {
+                  byte[] bytes = slot.name != null ? slot.name.getBytes() : new byte[0];
+                  int nameLength = Math.min(bytes.length, 31);
+                  this.sendData.put((byte) nameLength);
+                  this.sendData.put(bytes, 0, nameLength);
+                } else {
+                  this.sendData.put((byte) 0);
+                }
+              }
+              sendPacket(port, DINPUT_PACKET_LENGTH);
+            }
+          } catch (IOException ignored) {
+          }
+        });
+  }
+
+  private void suppressDInputSlotsAlreadyClaimedByXInput(int processId, GamepadClient dinputClient) {
+    int xinputClientIndex = findGamepadClientIndex(null, processId, true);
+    if (xinputClientIndex == -1) {
+      return;
+    }
+    GamepadClient xinputClient = this.gamepadClients.get(xinputClientIndex);
+    if (!xinputClient.updatedOnce) {
+      return;
+    }
+    for (int i = 0; i < MAX_CONTROLLERS; i++) {
+      if (xinputClient.enabledSlots[i]) {
+        dinputClient.enabledSlots[i] = false;
+      }
+    }
+  }
+
+  private void handleReleaseGamepadRequest(int port) {
+    if (this.receivePacket.getLength() >= 5) {
+      updateCursorFeedback();
+      return;
+    }
+    int index = findGamepadClientIndex(port, null, null);
+    if (index != -1) {
+      this.gamepadClients.remove(index);
+    }
+  }
+
+  private void updateCursorFeedback() {
+    short x = this.receiveData.getShort();
+    short y = this.receiveData.getShort();
+    XServer xServer = this.activity.getXServer();
+    xServer.pointer.setX(x);
+    xServer.pointer.setY(y);
+    this.activity.getXServerView().requestRender();
+  }
+
+  private void handleSetGamepadStateRequest() {
+    byte slot = this.receiveData.get();
+    if (slot < 0 || slot >= MAX_CONTROLLERS) {
+      return;
+    }
+    int leftMotorSpeed = this.receiveData.getInt();
+    int rightMotorSpeed = this.receiveData.getInt();
+    triggerVibration(leftMotorSpeed, rightMotorSpeed, UDP_VIBRATION_DURATION_MS, slot);
+  }
+
+  private int findGamepadClientIndex(Integer port, Integer processId, Boolean isXInput) {
+    for (int i = 0; i < this.gamepadClients.size(); i++) {
+      GamepadClient client = this.gamepadClients.get(i);
+      if ((port == null || client.port == port)
+          && (processId == null || client.processId == processId)
+          && (isXInput == null || client.xInput == isXInput)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  private void sendGamepadStateToClients(int slot, GamepadState state) {
+    if (!this.initReceived || slot < 0 || slot >= MAX_CONTROLLERS || state == null) {
+      return;
+    }
+    for (GamepadClient client : this.gamepadClients) {
+      if (!client.enabledSlots[slot]) {
+        continue;
+      }
+      addAction(
+          () -> {
+            try {
+              this.sendData.rewind();
+              this.sendData.put(RequestCodes.GET_GAMEPAD_STATE);
+              this.sendData.put((byte) slot);
+              state.writeTo(this.sendData);
+              sendPacket(client.port, client.xInput ? XINPUT_PACKET_LENGTH : DINPUT_PACKET_LENGTH);
+            } catch (IOException ignored) {
+            }
+          });
+    }
+  }
+
+  private void openUrlFromWinHandler() throws IOException {
+    int requestLength = this.receiveData.getInt();
+    if (requestLength <= 0) {
+      return;
+    }
+    byte[] data = new byte[requestLength];
+    this.socket.receive(new DatagramPacket(data, data.length));
+    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(new String(data)));
+    this.activity.startActivity(intent);
+  }
+
+  private void updateAndroidClipboardFromWinHandler() throws IOException {
+    int requestLength = this.receiveData.getInt();
+    byte[] data = new byte[Math.max(0, requestLength)];
+    if (requestLength > 0) {
+      this.socket.receive(new DatagramPacket(data, data.length));
+    }
+    ClipboardManager clipboardManager =
+        (ClipboardManager) this.activity.getSystemService(Context.CLIPBOARD_SERVICE);
+    if (clipboardManager != null) {
+      clipboardManager.setPrimaryClip(ClipData.newPlainText("", new String(data)));
+    }
+  }
+
   private void handleRequest(byte requestCode, int port) {
     switch (requestCode) {
-      case 1:
+      case RequestCodes.INIT:
         this.initReceived = true;
         this.preferences =
             PreferenceManager.getDefaultSharedPreferences(this.activity.getBaseContext());
@@ -482,7 +804,7 @@ public class WinHandler {
           this.actions.notifyAll();
         }
         return;
-      case 5:
+      case RequestCodes.GET_PROCESS:
         if (this.onGetProcessInfoListener != null) {
           this.receiveData.position(this.receiveData.position() + 4);
           int numProcesses = this.receiveData.getShort();
@@ -500,14 +822,29 @@ public class WinHandler {
               new ProcessInfo(pid, name, memoryUsage, affinityMask, wow64Process));
         }
         return;
-      case 10:
-      case 13:
-        short x = this.receiveData.getShort();
-        short y = this.receiveData.getShort();
-        XServer xServer = this.activity.getXServer();
-        xServer.pointer.setX(x);
-        xServer.pointer.setY(y);
-        this.activity.getXServerView().requestRender();
+      case RequestCodes.GET_GAMEPAD:
+        handleGetGamepadRequest(port);
+        return;
+      case RequestCodes.RELEASE_GAMEPAD:
+        handleReleaseGamepadRequest(port);
+        return;
+      case RequestCodes.CURSOR_POS_FEEDBACK:
+        updateCursorFeedback();
+        return;
+      case RequestCodes.SET_GAMEPAD_STATE:
+        handleSetGamepadStateRequest();
+        return;
+      case RequestCodes.OPEN_URL:
+        try {
+          openUrlFromWinHandler();
+        } catch (IOException ignored) {
+        }
+        return;
+      case RequestCodes.SET_CLIPBOARD_DATA:
+        try {
+          updateAndroidClipboardFromWinHandler();
+        } catch (IOException ignored) {
+        }
         return;
       default:
         return;
@@ -533,12 +870,15 @@ public class WinHandler {
             this.socket.setReuseAddress(true);
             this.socket.bind(new InetSocketAddress((InetAddress) null, SERVER_PORT));
             while (this.running) {
+              this.receivePacket.setLength(this.receiveData.capacity());
               this.socket.receive(this.receivePacket);
               synchronized (this.actions) {
                 if (!this.running) return;
                 this.receiveData.rewind();
+                this.receiveData.limit(this.receivePacket.getLength());
                 byte requestCode = this.receiveData.get();
                 handleRequest(requestCode, this.receivePacket.getPort());
+                this.receiveData.limit(this.receiveData.capacity());
               }
             }
           } catch (IOException e) {
@@ -565,8 +905,9 @@ public class WinHandler {
       int slot = assignSlot(-1);
       if (slot >= 0 && this.writers[slot] != null) {
         try {
-          this.writers[slot].writeGamepadState(
-              getOutputGamepadState(gamepadState, applyGyroOverlay));
+          GamepadState outputState = getOutputGamepadState(gamepadState, applyGyroOverlay);
+          this.writers[slot].writeGamepadState(outputState);
+          sendGamepadStateToClients(slot, outputState);
         } catch (IOException ignored) {
         }
         return;
@@ -599,8 +940,9 @@ public class WinHandler {
       int slot = assignSlot(controller.getDeviceId());
       if (slot >= 0 && this.writers[slot] != null) {
         try {
-          this.writers[slot].writeGamepadState(
-              getOutputGamepadState(controller.remappedState, applyGyroOverlay));
+          GamepadState outputState = getOutputGamepadState(controller.remappedState, applyGyroOverlay);
+          this.writers[slot].writeGamepadState(outputState);
+          sendGamepadStateToClients(slot, outputState);
         } catch (IOException ignored) {
         }
         return;
@@ -610,8 +952,9 @@ public class WinHandler {
     int slot2 = assignSlot(controller.getDeviceId());
     if (slot2 >= 0 && this.writers[slot2] != null) {
       try {
-        this.writers[slot2].writeGamepadState(
-            getOutputGamepadState(controller.state, applyGyroOverlay));
+        GamepadState outputState = getOutputGamepadState(controller.state, applyGyroOverlay);
+        this.writers[slot2].writeGamepadState(outputState);
+        sendGamepadStateToClients(slot2, outputState);
       } catch (IOException ignored) {
       }
     }
