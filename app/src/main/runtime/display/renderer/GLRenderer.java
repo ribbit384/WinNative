@@ -5,7 +5,9 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
-import android.util.Log;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Choreographer;
 import com.winlator.cmod.R;
 import com.winlator.cmod.runtime.display.renderer.material.CursorMaterial;
 import com.winlator.cmod.runtime.display.renderer.material.ShaderMaterial;
@@ -20,7 +22,6 @@ import com.winlator.cmod.runtime.display.xserver.WindowAttributes;
 import com.winlator.cmod.runtime.display.xserver.WindowManager;
 import com.winlator.cmod.runtime.display.xserver.XLock;
 import com.winlator.cmod.runtime.display.xserver.XServer;
-import com.winlator.cmod.shared.android.AppUtils;
 import com.winlator.cmod.shared.math.Mathf;
 import com.winlator.cmod.shared.math.XForm;
 import java.util.ArrayList;
@@ -52,11 +53,19 @@ public class GLRenderer
   public int surfaceWidth;
   public int surfaceHeight;
   private boolean cpuSaverMode = false;
+  private static final long NANOS_PER_SECOND = 1_000_000_000L;
   private static final int MAX_FPS_LIMIT = 1000;
-  private static final long FPS_LIMIT_SPIN_THRESHOLD_NS = 500_000L;
-  private final Object fpsLimiterLock = new Object();
+  private static final long PRODUCER_SLEEP_SLICE_NS = 2_000_000L;
+  private final Handler mainHandler = new Handler(Looper.getMainLooper());
+  private final Object framePacerLock = new Object();
+  private final Object frameProducerLock = new Object();
+  private final Choreographer.FrameCallback framePacerCallback = this::onFramePacerVsync;
   private volatile int currentFpsLimit = 0;
-  private long nextFrameTimeNanos = 0;
+  private long frameIntervalNanos = 0;
+  private long nextFrameDeadlineNanos = 0;
+  private long nextProducerFrameDeadlineNanos = 0;
+  private boolean framePending = false;
+  private boolean framePacerCallbackPosted = false;
   private boolean wasDirectMode = false;
 
   private final EffectComposer effectComposer;
@@ -228,7 +237,7 @@ public class GLRenderer
 
   @Override
   public void onUpdateWindowContent(Window window) {
-    xServerView.requestRender();
+    requestContentRender();
   }
 
   @Override
@@ -472,11 +481,25 @@ public class GLRenderer
 
   public void setFpsLimit(int fps) {
     int normalizedFps = Math.max(0, Math.min(fps, MAX_FPS_LIMIT));
-    synchronized (fpsLimiterLock) {
+    long normalizedFrameIntervalNanos =
+        normalizedFps > 0 ? Math.max(1L, NANOS_PER_SECOND / normalizedFps) : 0;
+    boolean shouldFlushPendingFrame = false;
+    synchronized (framePacerLock) {
       if (currentFpsLimit != normalizedFps) {
+        frameIntervalNanos = normalizedFrameIntervalNanos;
+        nextFrameDeadlineNanos = 0;
         currentFpsLimit = normalizedFps;
-        nextFrameTimeNanos = 0;
+        if (normalizedFps == 0 && framePending) {
+          framePending = false;
+          shouldFlushPendingFrame = true;
+        }
       }
+    }
+    if (shouldFlushPendingFrame) {
+      xServerView.requestRender();
+    }
+    synchronized (frameProducerLock) {
+      nextProducerFrameDeadlineNanos = 0;
     }
   }
 
@@ -484,35 +507,123 @@ public class GLRenderer
     return currentFpsLimit;
   }
 
-  public void enforceFpsLimit() {
+  public void throttleFrameProducer() {
     int targetFps = currentFpsLimit;
     if (targetFps <= 0) {
-      synchronized (fpsLimiterLock) {
-        nextFrameTimeNanos = 0;
+      synchronized (frameProducerLock) {
+        nextProducerFrameDeadlineNanos = 0;
       }
       return;
     }
 
-    long targetFrameTime = 1_000_000_000L / targetFps;
-    synchronized (fpsLimiterLock) {
+    long deadlineNanos;
+    synchronized (frameProducerLock) {
       long now = System.nanoTime();
-      if (nextFrameTimeNanos == 0 || now > nextFrameTimeNanos + targetFrameTime) {
-        nextFrameTimeNanos = now;
+      long interval = Math.max(1L, NANOS_PER_SECOND / targetFps);
+      if (nextProducerFrameDeadlineNanos == 0 || now - nextProducerFrameDeadlineNanos > interval) {
+        nextProducerFrameDeadlineNanos = now + interval;
+        return;
       }
 
-      long sleepTime = nextFrameTimeNanos - now;
-      while (sleepTime > 0) {
-        if (sleepTime > FPS_LIMIT_SPIN_THRESHOLD_NS) {
-          LockSupport.parkNanos(sleepTime - FPS_LIMIT_SPIN_THRESHOLD_NS);
-        } else {
-          Thread.yield();
-        }
-        now = System.nanoTime();
-        sleepTime = nextFrameTimeNanos - now;
-      }
-
-      nextFrameTimeNanos += targetFrameTime;
+      deadlineNanos = nextProducerFrameDeadlineNanos;
+      nextProducerFrameDeadlineNanos += interval;
     }
+
+    waitUntilProducerFrameSlot(deadlineNanos);
+  }
+
+  private void waitUntilProducerFrameSlot(long deadlineNanos) {
+    while (currentFpsLimit > 0) {
+      long remainingNanos = deadlineNanos - System.nanoTime();
+      if (remainingNanos <= 0) {
+        return;
+      }
+
+      LockSupport.parkNanos(Math.min(remainingNanos, PRODUCER_SLEEP_SLICE_NS));
+      if (Thread.interrupted()) {
+        Thread.currentThread().interrupt();
+        return;
+      }
+    }
+  }
+
+  private void requestContentRender() {
+    if (currentFpsLimit <= 0) {
+      synchronized (framePacerLock) {
+        framePending = false;
+        nextFrameDeadlineNanos = 0;
+      }
+      xServerView.requestRender();
+      return;
+    }
+
+    boolean shouldPostCallback;
+    synchronized (framePacerLock) {
+      framePending = true;
+      shouldPostCallback = !framePacerCallbackPosted;
+      if (shouldPostCallback) {
+        framePacerCallbackPosted = true;
+      }
+    }
+
+    if (shouldPostCallback) {
+      postFramePacerCallback();
+    }
+  }
+
+  private void postFramePacerCallback() {
+    if (Looper.myLooper() == Looper.getMainLooper()) {
+      Choreographer.getInstance().postFrameCallback(framePacerCallback);
+    } else {
+      mainHandler.post(() -> Choreographer.getInstance().postFrameCallback(framePacerCallback));
+    }
+  }
+
+  private void onFramePacerVsync(long frameTimeNanos) {
+    boolean shouldRequestRender = false;
+    boolean shouldPostCallback = false;
+
+    synchronized (framePacerLock) {
+      framePacerCallbackPosted = false;
+
+      if (!framePending) {
+        return;
+      }
+
+      if (currentFpsLimit <= 0 || frameIntervalNanos <= 0) {
+        framePending = false;
+        nextFrameDeadlineNanos = 0;
+        shouldRequestRender = true;
+      } else if (nextFrameDeadlineNanos == 0 || frameTimeNanos >= nextFrameDeadlineNanos) {
+        framePending = false;
+        shouldRequestRender = true;
+        advanceNextFrameDeadline(frameTimeNanos);
+      } else {
+        shouldPostCallback = true;
+        framePacerCallbackPosted = true;
+      }
+    }
+
+    if (shouldRequestRender) {
+      xServerView.requestRender();
+    }
+    if (shouldPostCallback) {
+      postFramePacerCallback();
+    }
+  }
+
+  private void advanceNextFrameDeadline(long frameTimeNanos) {
+    long interval = frameIntervalNanos;
+    long deadline = nextFrameDeadlineNanos;
+    if (deadline == 0 || frameTimeNanos - deadline > interval) {
+      nextFrameDeadlineNanos = frameTimeNanos + interval;
+      return;
+    }
+
+    do {
+      deadline += interval;
+    } while (deadline <= frameTimeNanos);
+    nextFrameDeadlineNanos = deadline;
   }
 
   private void resetFrameState() {
@@ -647,6 +758,6 @@ public class GLRenderer
 
   @Override
   public void onFramePresented(com.winlator.cmod.runtime.display.xserver.Window window) {
-    xServerView.requestRender();
+    requestContentRender();
   }
 }

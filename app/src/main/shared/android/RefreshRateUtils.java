@@ -199,12 +199,18 @@ public final class RefreshRateUtils {
     Display.Mode currentMode = display.getMode();
     Display.Mode bestMode = null;
     float bestModeRate = 0f;
+    Display.Mode fallbackMode = null;
+    float fallbackModeRate = 0f;
 
     for (Display.Mode mode : display.getSupportedModes()) {
       if (!isSameModeGroup(currentMode, mode)) continue;
 
       float refreshRate = mode.getRefreshRate();
       if (refreshRate <= 0f || refreshRate < fpsLimit) continue;
+      if (fallbackMode == null || refreshRate > fallbackModeRate) {
+        fallbackMode = mode;
+        fallbackModeRate = refreshRate;
+      }
       if (!isFrameCadenceCompatible(refreshRate, fpsLimit)) continue;
 
       if (bestMode == null
@@ -217,6 +223,9 @@ public final class RefreshRateUtils {
 
     if (bestMode != null) {
       return Math.round(bestModeRate);
+    }
+    if (fallbackMode != null) {
+      return Math.round(fallbackModeRate);
     }
     return fpsLimit;
   }
