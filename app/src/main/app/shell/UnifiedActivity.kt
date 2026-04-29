@@ -8854,7 +8854,7 @@ class UnifiedActivity :
                 containerManager.loadShortcuts().find {
                     it.getExtra("game_source") == "STEAM" && it.getExtra("app_id") == app.id.toString()
                 }
-            val launchExecutable = SteamService.getInstalledExe(app.id)
+            val detectedLaunchExecutable = SteamService.getInstalledExe(app.id)
 
             if (shortcut != null) {
                 if (!SetupWizardActivity.isContainerUsable(context, shortcut.container)) {
@@ -8869,7 +8869,10 @@ class UnifiedActivity :
                 normalizeContainerDrives(shortcut.container)
                 shortcut.putExtra("game_source", "STEAM")
                 shortcut.putExtra("game_install_path", gameInstallPath)
-                shortcut.putExtra("launch_exe_path", launchExecutable)
+                val existingLaunchExecutable = shortcut.getExtra("launch_exe_path")
+                if (existingLaunchExecutable.isNullOrBlank() && detectedLaunchExecutable.isNotBlank()) {
+                    shortcut.putExtra("launch_exe_path", detectedLaunchExecutable)
+                }
                 val loaderExec = "wine \"C:\\\\Program Files (x86)\\\\Steam\\\\steamclient_loader_x64.exe\""
                 val lines =
                     com.winlator.cmod.shared.io.FileUtils
@@ -8926,7 +8929,7 @@ class UnifiedActivity :
                 content.append("app_id=${app.id}\n")
                 content.append("container_id=${container.id}\n")
                 content.append("game_install_path=${gameInstallPath}\n")
-                content.append("launch_exe_path=${launchExecutable}\n")
+                content.append("launch_exe_path=${detectedLaunchExecutable}\n")
                 content.append("use_container_defaults=1\n")
 
                 com.winlator.cmod.shared.io.FileUtils
@@ -8994,21 +8997,30 @@ class UnifiedActivity :
                     currentPath == "A:\\" || currentPath == "A:\\\\" ||
                     currentPath.startsWith("A:\\")
                 ) {
-                    val exePath = EpicService.getInstalledExe(app.id)
                     val newExecCmd =
-                        if (exePath.isNotEmpty()) {
-                            buildStoreWineExecCommand(
-                                shortcut.container,
-                                "EPIC",
-                                gameInstallPath,
-                                java.io.File(gameInstallPath, exePath.replace("\\", "/")),
-                            )
-                        } else {
-                            val exeFile = findGameExe(gameDir)
-                            if (exeFile != null) {
-                                buildStoreWineExecCommand(shortcut.container, "EPIC", gameInstallPath, exeFile)
+                        buildStoreWineExecCommandForSelectedExe(
+                            shortcut.container,
+                            "EPIC",
+                            gameInstallPath,
+                            shortcut.getExtra("launch_exe_path"),
+                        ) ?: run {
+                            val exePath = EpicService.getInstalledExe(app.id)
+                            if (exePath.isNotEmpty()) {
+                                shortcut.putExtra("launch_exe_path", exePath)
+                                buildStoreWineExecCommand(
+                                    shortcut.container,
+                                    "EPIC",
+                                    gameInstallPath,
+                                    java.io.File(gameInstallPath, exePath.replace("\\", "/")),
+                                )
                             } else {
-                                null
+                                val exeFile = findGameExe(gameDir)
+                                if (exeFile != null) {
+                                    shortcut.putExtra("launch_exe_path", exeFile.absolutePath)
+                                    buildStoreWineExecCommand(shortcut.container, "EPIC", gameInstallPath, exeFile)
+                                } else {
+                                    null
+                                }
                             }
                         }
                     if (newExecCmd != null) {
@@ -9082,6 +9094,9 @@ class UnifiedActivity :
                 content.append("app_id=${app.id}\n")
                 content.append("container_id=${container.id}\n")
                 content.append("game_install_path=${gameInstallPath}\n")
+                if (exePath.isNotEmpty()) {
+                    content.append("launch_exe_path=${exePath}\n")
+                }
                 content.append("use_container_defaults=1\n")
 
                 com.winlator.cmod.shared.io.FileUtils
@@ -9149,29 +9164,17 @@ class UnifiedActivity :
                     currentPath.startsWith("A:\\")
                 ) {
                     val newExecCmd =
-                        if (shortcut.getExtra("launch_exe_path").isNotEmpty()) {
-                            val selectedExe = java.io.File(shortcut.getExtra("launch_exe_path"))
-                            if (selectedExe.exists()) {
-                                val normalizedBaseDir =
-                                    java.io
-                                        .File(gameInstallPath)
-                                        .absolutePath
-                                        .removeSuffix("/")
-                                val normalizedExePath = selectedExe.absolutePath
-                                if (normalizedExePath == normalizedBaseDir || normalizedExePath.startsWith("$normalizedBaseDir/")) {
-                                    buildStoreWineExecCommand(shortcut.container, "GOG", gameInstallPath, selectedExe)
-                                } else {
-                                    val hostPath = normalizedExePath.replace("/", "\\\\").let { if (it.startsWith("\\")) it else "\\$it" }
-                                    "wine \"Z:${hostPath}\""
-                                }
-                            } else {
-                                null
-                            }
-                        } else {
+                        buildStoreWineExecCommandForSelectedExe(
+                            shortcut.container,
+                            "GOG",
+                            gameInstallPath,
+                            shortcut.getExtra("launch_exe_path"),
+                        ) ?: run {
                             val libraryItem =
                                 LibraryItem("GOG_${app.id}", app.title, com.winlator.cmod.feature.stores.steam.enums.GameSource.GOG)
                             val exePath = GOGService.getInstalledExe(libraryItem)
                             if (exePath.isNotEmpty()) {
+                                shortcut.putExtra("launch_exe_path", exePath)
                                 buildStoreWineExecCommand(
                                     shortcut.container,
                                     "GOG",
@@ -9181,6 +9184,7 @@ class UnifiedActivity :
                             } else {
                                 val exeFile = findGameExe(gameDir)
                                 if (exeFile != null) {
+                                    shortcut.putExtra("launch_exe_path", exeFile.absolutePath)
                                     buildStoreWineExecCommand(shortcut.container, "GOG", gameInstallPath, exeFile)
                                 } else {
                                     null
@@ -9258,10 +9262,13 @@ class UnifiedActivity :
             content.append("\n[Extra Data]\n")
             content.append("game_source=GOG\n")
             content.append("gog_id=${app.id}\n")
-            content.append("app_id=${gogPseudoId(app.id)}\n")
-            content.append("container_id=${container.id}\n")
-            content.append("game_install_path=${gameInstallPath}\n")
-            content.append("use_container_defaults=1\n")
+                content.append("app_id=${gogPseudoId(app.id)}\n")
+                content.append("container_id=${container.id}\n")
+                content.append("game_install_path=${gameInstallPath}\n")
+                if (exePath.isNotEmpty()) {
+                    content.append("launch_exe_path=${exePath}\n")
+                }
+                content.append("use_container_defaults=1\n")
 
             com.winlator.cmod.shared.io.FileUtils
                 .writeString(shortcutFile, content.toString())
@@ -9339,8 +9346,33 @@ class UnifiedActivity :
                 val linkName =
                     com.winlator.cmod.runtime.wine.WineUtils.getDriveCGameLinkName(gameInstallPath)
                 "C:\\WinNative\\Games\\$source\\$linkName\\$relativePath"
-            }
+        }
         return "wine \"$windowsPath\""
+    }
+
+    private fun buildStoreWineExecCommandForSelectedExe(
+        container: com.winlator.cmod.runtime.container.Container?,
+        source: String,
+        gameInstallPath: String,
+        selectedExePath: String?,
+    ): String? {
+        if (selectedExePath.isNullOrBlank()) return null
+
+        val selectedExe = java.io.File(selectedExePath)
+        if (!selectedExe.isFile) return null
+
+        val normalizedBaseDir =
+            java.io
+                .File(gameInstallPath)
+                .absolutePath
+                .removeSuffix("/")
+        val normalizedExePath = selectedExe.absolutePath
+        return if (normalizedExePath == normalizedBaseDir || normalizedExePath.startsWith("$normalizedBaseDir/")) {
+            buildStoreWineExecCommand(container, source, gameInstallPath, selectedExe)
+        } else {
+            val hostPath = normalizedExePath.replace("/", "\\\\").let { if (it.startsWith("\\")) it else "\\$it" }
+            "wine \"Z:${hostPath}\""
+        }
     }
 
     // Launch custom game by shortcut name
